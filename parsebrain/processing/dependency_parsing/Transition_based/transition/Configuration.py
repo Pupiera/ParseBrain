@@ -1,10 +1,7 @@
-from collections import deque
-
-
 class Configuration:
     def __init__(self):
         self.buffer = []
-        self.stack = deque()
+        self.stack = []
         self.arc = []
 
     def add_features(self, features):

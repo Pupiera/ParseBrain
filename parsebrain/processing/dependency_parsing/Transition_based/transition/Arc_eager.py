@@ -74,7 +74,6 @@ class ArcEagerTransition(Transition):
         """
             Pop first element of buffer on the top of the stack
             Shift: (σ, wi|β, A) ⇒ (σ|wi, β, A)
-            >>> from collections import deque
             >>> conf = Configuration()
             >>> conf.buffer = ["Hey", "Parsing", "Is", "Fun"]
             >>> x = ArcEagerTransition()
@@ -130,7 +129,7 @@ class ArcEagerTransition(Transition):
         >>> conf = x.shift(conf)
         >>> conf = x.right_arc(conf)
         >>> conf.buffer, conf.stack, conf.arc[-1].head, conf.arc[-1].dependent
-        (['Is', 'Fun'], deque(['Hey', 'Parsing']), 'Hey', 'Parsing')
+        (['Is', 'Fun'], ['Hey', 'Parsing'], 'Hey', 'Parsing')
         >>>
         """
         wi = config.stack[0]
@@ -148,14 +147,13 @@ class ArcEagerTransition(Transition):
     def left_arc(config):
         """
         Left-Arc: (σ|wi, wj|β, A) ⇒ (σ, wj|β, A ∪ {wi ← wj})    ¬HEAD(wi )
-        >>> from collections import deque
         >>> conf = Configuration()
         >>> conf.buffer = ["Hey", "Parsing", "Is", "Fun"]
         >>> x = ArcEagerTransition()
         >>> conf = x.shift(conf)
         >>> conf = x.left_arc(conf)
         >>> conf.buffer, conf.stack, conf.arc[-1].head, conf.arc[-1].dependent
-        (['Parsing', 'Is', 'Fun'], deque([]), 'Parsing', 'Hey')
+        (['Parsing', 'Is', 'Fun'], [], 'Parsing', 'Hey')
         >>>
         :return:
         """
