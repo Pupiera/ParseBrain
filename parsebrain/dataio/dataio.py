@@ -41,9 +41,10 @@ def load_data_conllu(conllu_path, keys, replacement={}):
                 if line.startswith("# sent_id"):
                     sent_id = line.split()[-1]
                     current_sent = ConlluDict()
-                if line == '\n':  # end of sentence
-                    result[sent_id] = current_sent
-                    current_sent = None
+                continue
+            if not line:  # end of sentence
+                result[sent_id] = current_sent
+                current_sent = ConlluDict()
                 continue
             fields = line.split('\t')
             if len(fields) == 1:
