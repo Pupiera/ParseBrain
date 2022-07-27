@@ -6,7 +6,7 @@ import sys
 
 import speechbrain as sb
 from hyperpyyaml import load_hyperpyyaml
-
+from speechbrain.utils.distributed import run_on_main
 import parsebrain as pb  # extension of speechbrain
 import torch
 
@@ -14,7 +14,14 @@ import torch
 class Parser(sb.core.Brain):
 
     def compute_forward(self, batch, stage):
+        print(batch)
+        print(batch.tokens)
+        print(batch.tokens_conllu)
+        tokens = batch.tokens.data
+        print(tokens)
+        print(tokens.shape)
         features = self.extract_features(batch)
+
         parse, decision_score_history = self.parser.parse(features)
         return (parse, decision_score_history)
 
@@ -58,7 +65,8 @@ def dataio_prepare(hparams, tokenizer):
     )
     def text_pipeline(words):
         wrd = " ".join(words)
-        tokens_list = tokenizer.sp.encode_as_ids(wrd)
+        print(wrd)
+        tokens_list = tokenizer.encode_as_ids(wrd)
         yield tokens_list
         tokens_bos = torch.LongTensor([hparams["bos_index"]] + (tokens_list))
         yield tokens_bos
@@ -67,8 +75,8 @@ def dataio_prepare(hparams, tokenizer):
         tokens = torch.LongTensor(tokens_list)
         yield tokens
         tokens_conllu = []
-        for str in words:
-            tokens_conllu.append(tokenizer.sp.encode_as_ids(str))
+        for i, str in enumerate(words):
+            tokens_conllu.extend([i+1]*len(tokenizer.encode_as_ids(str)))
         tokens_conllu = torch.LongTensor(tokens_conllu)
         yield tokens_conllu
 
@@ -76,7 +84,7 @@ def dataio_prepare(hparams, tokenizer):
 
     # 3. Set output:
     sb.dataio.dataset.set_output_keys(
-        datasets, ["sent_id", "tokens_bos", "tokens_eos", "tokens", "tokens_conllu"],
+        datasets, ["tokens_bos", "tokens_eos", "tokens", "tokens_conllu"],
     )
     return train_data, valid_data, test_data
 
@@ -97,6 +105,8 @@ if __name__ == "__main__":
         hyperparams_to_save=hparams_file,
         overrides=overrides,
     )
+    run_on_main(hparams["pretrainer"].collect_files)
+    hparams["pretrainer"].load_collected(device=run_opts["device"])
 
     tokenizer = hparams['tokenizer']
 
@@ -109,3 +119,10 @@ if __name__ == "__main__":
         run_opts=run_opts,
         checkpointer=hparams["checkpointer"],
     )
+
+    brain.fit(brain.hparams.epoch_counter,
+            train_data,
+            valid_data,
+            train_loader_kwargs=hparams['dataloader_options'],
+            valid_loader_kwargs=hparams['test_dataloader_options'],
+            )
