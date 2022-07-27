@@ -1,0 +1,319 @@
+2022-07-27 11:09:09,824 - speechbrain.core - INFO - Beginning experiment!
+2022-07-27 11:09:09,824 - speechbrain.core - INFO - Experiment folder: results/Orfeo_arc_eager/1234
+2022-07-27 11:09:10,117 - speechbrain.utils.superpowers - DEBUG - anvil-uplink==0.3.42
+certifi==2021.10.8
+charset-normalizer==2.0.10
+click==8.0.3
+configparser==5.2.0
+cycler==0.11.0
+docker-pycreds==0.4.0
+filelock==3.4.2
+fonttools==4.32.0
+future==0.18.2
+gitdb==4.0.9
+GitPython==3.1.26
+greenlet==1.1.2
+huggingface-hub==0.4.0
+HyperPyYAML==1.0.0
+idna==3.3
+joblib==1.1.0
+kiwisolver==1.4.2
+matplotlib==3.5.1
+msgpack==1.0.3
+neovim==0.3.1
+nltk==3.6.7
+numpy==1.22.1
+packaging==21.3
+pandas==1.4.2
+# Editable install with no version control (parsebrain==0.1)
+-e /home/pupiera/Nextcloud/thesis/ParseBrain
+pathtools==0.1.2
+Pillow==9.1.0
+promise==2.3
+protobuf==3.19.3
+psutil==5.9.0
+pyDeprecate==0.3.2
+pynvim==0.4.3
+pyparsing==3.0.7
+python-dateutil==2.8.2
+python-Levenshtein==0.12.2
+pytz==2022.1
+PyYAML==6.0
+regex==2022.1.18
+requests==2.27.1
+ruamel.yaml==0.17.20
+ruamel.yaml.clib==0.2.6
+sacremoses==0.0.47
+scikit-learn==1.0.2
+scipy==1.7.3
+sentencepiece==0.1.96
+sentry-sdk==1.5.4
+shortuuid==1.0.8
+six==1.16.0
+sklearn==0.0
+smmap==5.0.0
+-e git+https://github.com/speechbrain/speechbrain.git@9d56d50809d8745cc7dafa930aec554145be4028#egg=speechbrain
+subprocess32==3.5.4
+termcolor==1.1.0
+thefuzz==0.19.0
+threadpoolctl==3.1.0
+tokenizers==0.10.3
+torch==1.10.2
+torchaudio==0.10.2
+torchmetrics==0.7.2
+tqdm==4.62.3
+transformers==4.15.0
+typing_extensions==4.0.1
+urllib3==1.26.8
+wandb==0.12.9
+ws4py==0.5.1
+xlrd==2.0.1
+yaspin==2.1.0
+
+
+2022-07-27 11:09:16,921 - speechbrain.core - ERROR - Exception:
+Traceback (most recent call last):
+  File "/home/pupiera/Nextcloud/thesis/ParseBrain/recipe/CEFC-ORFEO/Transition_based/train.py", line 107, in <module>
+    modules=hparams["modules"],
+KeyError: 'modules'
+2022-07-27 11:18:53,900 - speechbrain.core - INFO - Beginning experiment!
+2022-07-27 11:18:53,900 - speechbrain.core - INFO - Experiment folder: results/Orfeo_arc_eager/1234
+2022-07-27 11:18:54,181 - speechbrain.utils.superpowers - DEBUG - anvil-uplink==0.3.42
+certifi==2021.10.8
+charset-normalizer==2.0.10
+click==8.0.3
+configparser==5.2.0
+cycler==0.11.0
+docker-pycreds==0.4.0
+filelock==3.4.2
+fonttools==4.32.0
+future==0.18.2
+gitdb==4.0.9
+GitPython==3.1.26
+greenlet==1.1.2
+huggingface-hub==0.4.0
+HyperPyYAML==1.0.0
+idna==3.3
+joblib==1.1.0
+kiwisolver==1.4.2
+matplotlib==3.5.1
+msgpack==1.0.3
+neovim==0.3.1
+nltk==3.6.7
+numpy==1.22.1
+packaging==21.3
+pandas==1.4.2
+# Editable install with no version control (parsebrain==0.1)
+-e /home/pupiera/Nextcloud/thesis/ParseBrain
+pathtools==0.1.2
+Pillow==9.1.0
+promise==2.3
+protobuf==3.19.3
+psutil==5.9.0
+pyDeprecate==0.3.2
+pynvim==0.4.3
+pyparsing==3.0.7
+python-dateutil==2.8.2
+python-Levenshtein==0.12.2
+pytz==2022.1
+PyYAML==6.0
+regex==2022.1.18
+requests==2.27.1
+ruamel.yaml==0.17.20
+ruamel.yaml.clib==0.2.6
+sacremoses==0.0.47
+scikit-learn==1.0.2
+scipy==1.7.3
+sentencepiece==0.1.96
+sentry-sdk==1.5.4
+shortuuid==1.0.8
+six==1.16.0
+sklearn==0.0
+smmap==5.0.0
+-e git+https://github.com/speechbrain/speechbrain.git@9d56d50809d8745cc7dafa930aec554145be4028#egg=speechbrain
+subprocess32==3.5.4
+termcolor==1.1.0
+thefuzz==0.19.0
+threadpoolctl==3.1.0
+tokenizers==0.10.3
+torch==1.10.2
+torchaudio==0.10.2
+torchmetrics==0.7.2
+tqdm==4.62.3
+transformers==4.15.0
+typing_extensions==4.0.1
+urllib3==1.26.8
+wandb==0.12.9
+ws4py==0.5.1
+xlrd==2.0.1
+yaspin==2.1.0
+
+
+2022-07-27 11:18:59,657 - speechbrain.core - ERROR - Exception:
+Traceback (most recent call last):
+  File "/home/pupiera/Nextcloud/thesis/ParseBrain/recipe/CEFC-ORFEO/Transition_based/train.py", line 110, in <module>
+    checkpointer=hparams["checkpointer"],
+KeyError: 'checkpointer'
+2022-07-27 11:19:31,981 - speechbrain.core - INFO - Beginning experiment!
+2022-07-27 11:19:31,981 - speechbrain.core - INFO - Experiment folder: results/Orfeo_arc_eager/1234
+2022-07-27 11:19:32,242 - speechbrain.utils.superpowers - DEBUG - anvil-uplink==0.3.42
+certifi==2021.10.8
+charset-normalizer==2.0.10
+click==8.0.3
+configparser==5.2.0
+cycler==0.11.0
+docker-pycreds==0.4.0
+filelock==3.4.2
+fonttools==4.32.0
+future==0.18.2
+gitdb==4.0.9
+GitPython==3.1.26
+greenlet==1.1.2
+huggingface-hub==0.4.0
+HyperPyYAML==1.0.0
+idna==3.3
+joblib==1.1.0
+kiwisolver==1.4.2
+matplotlib==3.5.1
+msgpack==1.0.3
+neovim==0.3.1
+nltk==3.6.7
+numpy==1.22.1
+packaging==21.3
+pandas==1.4.2
+# Editable install with no version control (parsebrain==0.1)
+-e /home/pupiera/Nextcloud/thesis/ParseBrain
+pathtools==0.1.2
+Pillow==9.1.0
+promise==2.3
+protobuf==3.19.3
+psutil==5.9.0
+pyDeprecate==0.3.2
+pynvim==0.4.3
+pyparsing==3.0.7
+python-dateutil==2.8.2
+python-Levenshtein==0.12.2
+pytz==2022.1
+PyYAML==6.0
+regex==2022.1.18
+requests==2.27.1
+ruamel.yaml==0.17.20
+ruamel.yaml.clib==0.2.6
+sacremoses==0.0.47
+scikit-learn==1.0.2
+scipy==1.7.3
+sentencepiece==0.1.96
+sentry-sdk==1.5.4
+shortuuid==1.0.8
+six==1.16.0
+sklearn==0.0
+smmap==5.0.0
+-e git+https://github.com/speechbrain/speechbrain.git@9d56d50809d8745cc7dafa930aec554145be4028#egg=speechbrain
+subprocess32==3.5.4
+termcolor==1.1.0
+thefuzz==0.19.0
+threadpoolctl==3.1.0
+tokenizers==0.10.3
+torch==1.10.2
+torchaudio==0.10.2
+torchmetrics==0.7.2
+tqdm==4.62.3
+transformers==4.15.0
+typing_extensions==4.0.1
+urllib3==1.26.8
+wandb==0.12.9
+ws4py==0.5.1
+xlrd==2.0.1
+yaspin==2.1.0
+
+
+2022-07-27 11:19:38,430 - speechbrain.core - ERROR - Exception:
+Traceback (most recent call last):
+  File "/home/pupiera/Nextcloud/thesis/ParseBrain/recipe/CEFC-ORFEO/Transition_based/train.py", line 110, in <module>
+    checkpointer=hparams["checkpointer"],
+KeyError: 'checkpointer'
+2022-07-27 11:20:45,994 - speechbrain.core - INFO - Beginning experiment!
+2022-07-27 11:20:45,995 - speechbrain.core - INFO - Experiment folder: results/Orfeo_arc_eager/1234
+2022-07-27 11:20:46,278 - speechbrain.utils.superpowers - DEBUG - anvil-uplink==0.3.42
+certifi==2021.10.8
+charset-normalizer==2.0.10
+click==8.0.3
+configparser==5.2.0
+cycler==0.11.0
+docker-pycreds==0.4.0
+filelock==3.4.2
+fonttools==4.32.0
+future==0.18.2
+gitdb==4.0.9
+GitPython==3.1.26
+greenlet==1.1.2
+huggingface-hub==0.4.0
+HyperPyYAML==1.0.0
+idna==3.3
+joblib==1.1.0
+kiwisolver==1.4.2
+matplotlib==3.5.1
+msgpack==1.0.3
+neovim==0.3.1
+nltk==3.6.7
+numpy==1.22.1
+packaging==21.3
+pandas==1.4.2
+# Editable install with no version control (parsebrain==0.1)
+-e /home/pupiera/Nextcloud/thesis/ParseBrain
+pathtools==0.1.2
+Pillow==9.1.0
+promise==2.3
+protobuf==3.19.3
+psutil==5.9.0
+pyDeprecate==0.3.2
+pynvim==0.4.3
+pyparsing==3.0.7
+python-dateutil==2.8.2
+python-Levenshtein==0.12.2
+pytz==2022.1
+PyYAML==6.0
+regex==2022.1.18
+requests==2.27.1
+ruamel.yaml==0.17.20
+ruamel.yaml.clib==0.2.6
+sacremoses==0.0.47
+scikit-learn==1.0.2
+scipy==1.7.3
+sentencepiece==0.1.96
+sentry-sdk==1.5.4
+shortuuid==1.0.8
+six==1.16.0
+sklearn==0.0
+smmap==5.0.0
+-e git+https://github.com/speechbrain/speechbrain.git@9d56d50809d8745cc7dafa930aec554145be4028#egg=speechbrain
+subprocess32==3.5.4
+termcolor==1.1.0
+thefuzz==0.19.0
+threadpoolctl==3.1.0
+tokenizers==0.10.3
+torch==1.10.2
+torchaudio==0.10.2
+torchmetrics==0.7.2
+tqdm==4.62.3
+transformers==4.15.0
+typing_extensions==4.0.1
+urllib3==1.26.8
+wandb==0.12.9
+ws4py==0.5.1
+xlrd==2.0.1
+yaspin==2.1.0
+
+
+2022-07-27 11:20:53,605 - speechbrain.core - INFO - Info: ckpt_interval_minutes arg from hparam file is used
+2022-07-27 11:20:53,619 - speechbrain.core - ERROR - Exception:
+Traceback (most recent call last):
+  File "/home/pupiera/Nextcloud/thesis/ParseBrain/recipe/CEFC-ORFEO/Transition_based/train.py", line 106, in <module>
+    brain = Parser(
+  File "/home/pupiera/apps/speechbrain/speechbrain/core.py", line 504, in __init__
+    torch.cuda.set_device(int(self.device[-1]))
+  File "/home/pupiera/anaconda3/envs/pytorch/lib/python3.9/site-packages/torch/cuda/__init__.py", line 311, in set_device
+    torch._C._cuda_setDevice(device)
+  File "/home/pupiera/anaconda3/envs/pytorch/lib/python3.9/site-packages/torch/cuda/__init__.py", line 214, in _lazy_init
+    torch._C._cuda_init()
+RuntimeError: Found no NVIDIA driver on your system. Please check that you have an NVIDIA GPU and installed a driver from http://www.nvidia.com/Download/index.aspx
