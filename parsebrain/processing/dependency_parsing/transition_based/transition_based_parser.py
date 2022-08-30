@@ -1,14 +1,15 @@
 # maybe inherit from nn.module ?
-from transition.Transition import Transition
+from transition.transition import Transition
 import torch
 
 
-class transition_based_parser:
-    def __int__(self, neural_network, transition: Transition, configuration, features_computer):
+class TransitionBasedParser:
+    def __init__(self, neural_network, transition: Transition, configuration, features_computer, dynamic_oracle):
         self.config = configuration
         self.parser_neural_network = neural_network
         self.transition = transition
         self.features_computer = features_computer
+        self.dynamic_oracle = dynamic_oracle
 
     def parse(self, features):
         '''

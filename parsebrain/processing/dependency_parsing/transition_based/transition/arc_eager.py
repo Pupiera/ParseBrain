@@ -1,6 +1,6 @@
-from .Transition import Transition
-from .Arc import Right_Arc, Left_Arc
-from .Configuration import Configuration
+from .transition import Transition
+from .arc import Right_Arc, Left_Arc
+from .configuration import Configuration
 
 
 class ArcEagerTransition(Transition):

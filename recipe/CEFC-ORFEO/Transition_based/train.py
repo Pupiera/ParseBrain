@@ -23,7 +23,7 @@ class Parser(sb.core.Brain):
         features = self.extract_features(batch)
 
         parse, decision_score_history = self.parser.parse(features)
-        return (parse, decision_score_history)
+        return parse, decision_score_history
 
     def compute_objectives(self, predictions, batch, stage):
         # compute loss : Need to compute predictions (list of gold transitions)
