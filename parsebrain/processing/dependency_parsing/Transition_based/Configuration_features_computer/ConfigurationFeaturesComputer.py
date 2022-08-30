@@ -9,6 +9,9 @@ class ConfigurationFeaturesComputer:
 
 class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
     """
+    This class implement the logics for combining the features from the stack and buffer to take the decision.
+    Here the logic is to concatenate the n top element of the stack and the first (next) element of the buffer.
+
     >>> from parsebrain.processing.dependency_parsing.Transition_based.transition.Configuration import Configuration
     >>> x = ConfigurationFeaturesComputerConcat(2, 10)
     >>> conf = Configuration()
@@ -56,5 +59,4 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
 
 if __name__ == "__main__":
     import doctest
-
     doctest.testmod()

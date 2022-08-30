@@ -1,18 +1,17 @@
-from Transition import Transition
-from Arc import Right_Arc, Left_Arc
-from Configuration import Configuration
+from .Transition import Transition
+from .Arc import Right_Arc, Left_Arc
+from .Configuration import Configuration
 
-
-# use docTest
 
 class ArcEagerTransition(Transition):
 
     def __init__(self):
         super().__init__()
         self.SHIFT = 0
-        self.REDUCE = 1
-        self.LEFT = 2
-        self.RIGHT = 3
+        self.LEFT = 1
+        self.RIGHT = 2
+        self.REDUCE = 3
+
 
     def get_transition_dict(self):
         return {"SHIFT": self.SHIFT,
@@ -30,7 +29,7 @@ class ArcEagerTransition(Transition):
         elif decision == self.RIGHT:
             return self.right_arc(config)
         else:
-            raise ValueError(f"Decision {decision} out of scope for arc-eager transition")
+            raise ValueError(f"Decision number ({decision}) is out of scope for arc-eager transition")
 
     def is_decision_valid(self, decision, config):
         if decision == self.SHIFT:
@@ -51,13 +50,13 @@ class ArcEagerTransition(Transition):
     def has_head(wi, arc):
         """
         The condition HEAD(wi ) is true in a configuration (σ, β, A) if A contains an arc wk → wi
-        Check if wi already has a HEAD.
+        Check if wi already has a HEAD. ie. check if wi is the dependent in a dependency.
         :param wi:
         :param arc:
         :return:
         """
         for a in arc:
-            if a.head == wi:
+            if a.dependent == wi:
                 return True
         return False
 
@@ -72,27 +71,34 @@ class ArcEagerTransition(Transition):
     @staticmethod
     def shift(config):
         """
-            Pop first element of buffer on the top of the stack
-            Shift: (σ, wi|β, A) ⇒ (σ|wi, β, A)
-            >>> conf = Configuration()
-            >>> conf.buffer = ["Hey", "Parsing", "Is", "Fun"]
-            >>> x = ArcEagerTransition()
-            >>> conf = x.shift(conf)
-            >>> conf.buffer, conf.stack.pop()
-            (['Parsing', 'Is', 'Fun'], 'Hey')
-            >>>
-
-        :return:
+        Pop first element of buffer on the top of the stack
+        Shift: (σ, wi|β, A) ⇒ (σ|wi, β, A)
+        >>> conf = Configuration()
+        >>> conf.buffer = ["Hey", "Parsing", "Is", "Fun"]
+        >>> conf.buffer_string = ["Hey", "Parsing", "Is", "Fun"]
+        >>> x = ArcEagerTransition()
+        >>> conf = x.shift(conf)
+        >>> conf.buffer, conf.stack.pop()
+        (['Parsing', 'Is', 'Fun'], 'Hey')
+        >>> conf.buffer_string, conf.stack_string.pop()
+        (['Parsing', 'Is', 'Fun'], 'Hey')
+        >>>
         """
+
         config.stack.append(config.buffer[0])
+        config.stack_string.append(config.buffer_string[0])
         config.shift_buffer()
         return config
 
-    def reduce_condition(self, config):
-        if len(config.stack[0]) == 0:
+    @staticmethod
+    def reduce_condition(config):
+        try:
+            if len(config.stack[0]) == 0:
+                return False
+            wi = config.stack_string[-1]
+        except IndexError:
             return False
-        wi = config.stack[0]
-        return self.has_head(wi, config.arc)
+        return ArcEagerTransition.has_head(wi, config.arc)
 
     @staticmethod
     def reduce(config):
@@ -102,16 +108,20 @@ class ArcEagerTransition(Transition):
 
         >>> conf = Configuration()
         >>> conf.buffer = ["Hey", "Parsing", "Is", "Fun"]
+        >>> conf.buffer_string = ["Hey", "Parsing", "Is", "Fun"]
         >>> x = ArcEagerTransition()
         >>> conf = x.shift(conf)
         >>> conf = x.shift(conf)
         >>> conf = x.reduce(conf)
         >>> conf.buffer, conf.stack.pop()
         (['Is', 'Fun'], 'Hey')
+        >>> conf.buffer_string, conf.stack_string.pop()
+        (['Is', 'Fun'], 'Hey')
         >>>
-
         """
+
         config.stack.pop()
+        config.stack_string.pop()
         return config
 
     @staticmethod
@@ -125,23 +135,34 @@ class ArcEagerTransition(Transition):
         :return:
         >>> conf = Configuration()
         >>> conf.buffer = ["Hey", "Parsing", "Is", "Fun"]
+        >>> conf.buffer_string = ["Hey", "Parsing", "Is", "Fun"]
         >>> x = ArcEagerTransition()
         >>> conf = x.shift(conf)
         >>> conf = x.right_arc(conf)
         >>> conf.buffer, conf.stack, conf.arc[-1].head, conf.arc[-1].dependent
         (['Is', 'Fun'], ['Hey', 'Parsing'], 'Hey', 'Parsing')
+        >>> conf.buffer_string, conf.stack_string, conf.arc[-1].head, conf.arc[-1].dependent
+        (['Is', 'Fun'], ['Hey', 'Parsing'], 'Hey', 'Parsing')
         >>>
         """
+
         wi = config.stack[0]
+        wi_string = config.stack_string[0]
         wj = config.buffer[0]
+        wj_string = config.buffer_string[0]
         config.stack.append(wj)
-        config.arc.append(Right_Arc(head=wi, dependent=wj))
+        config.stack_string.append(wj_string)
+        config.arc.append(Right_Arc(head=wi_string, dependent=wj_string))
         config.shift_buffer()
         return config
 
-    def left_arc_condition(self, config):
-        wi = config.stack[0]
-        return not self.has_head(wi, config.arc)
+    @staticmethod
+    def left_arc_condition(config):
+        try:
+            wi = config.stack_string[-1]
+        except IndexError:
+            return False
+        return not ArcEagerTransition.has_head(wi, config.arc)
 
     @staticmethod
     def left_arc(config):
@@ -149,21 +170,27 @@ class ArcEagerTransition(Transition):
         Left-Arc: (σ|wi, wj|β, A) ⇒ (σ, wj|β, A ∪ {wi ← wj})    ¬HEAD(wi )
         >>> conf = Configuration()
         >>> conf.buffer = ["Hey", "Parsing", "Is", "Fun"]
+        >>> conf.buffer_string = ["Hey", "Parsing", "Is", "Fun"]
         >>> x = ArcEagerTransition()
         >>> conf = x.shift(conf)
         >>> conf = x.left_arc(conf)
         >>> conf.buffer, conf.stack, conf.arc[-1].head, conf.arc[-1].dependent
         (['Parsing', 'Is', 'Fun'], [], 'Parsing', 'Hey')
         >>>
+        >>> conf.buffer_string, conf.stack_string, conf.arc[-1].head, conf.arc[-1].dependent
+        (['Parsing', 'Is', 'Fun'], [], 'Parsing', 'Hey')
+        >>>
         :return:
         """
+
         wi = config.stack.pop()
+        wi_string = config.stack_string.pop()
         wj = config.buffer[0]
-        config.arc.append(Left_Arc(head=wj, dependent=wi))
+        wj_string = config.buffer_string[0]
+        config.arc.append(Left_Arc(head=wj_string, dependent=wi_string))
         return config
 
 
 if __name__ == "__main__":
     import doctest
-
     doctest.testmod()
