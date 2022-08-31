@@ -12,7 +12,7 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
     This class implement the logics for combining the features from the stack and buffer to take the decision.
     Here the logic is to concatenate the n top element of the stack and the first (next) element of the buffer.
 
-    >>> from parsebrain.processing.dependency_parsing.transition_based.transition.Configuration import Configuration
+    >>> from parsebrain.processing.dependency_parsing.transition_based.transition.configuration import Configuration
     >>> x = ConfigurationFeaturesComputerConcat(2, 10)
     >>> conf = Configuration()
     >>> conf.buffer = [torch.ones(10)]
@@ -23,7 +23,7 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
             0., 0., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.])
     >>>
 
-    >>> from parsebrain.processing.dependency_parsing.transition_based.transition.Configuration import Configuration
+    >>> from parsebrain.processing.dependency_parsing.transition_based.transition.configuration import Configuration
     >>> x = ConfigurationFeaturesComputerConcat(4, 10)
     >>> conf = Configuration()
     >>> conf.buffer = [torch.ones(10)]

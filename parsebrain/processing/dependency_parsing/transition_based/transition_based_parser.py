@@ -1,24 +1,26 @@
-# maybe inherit from nn.module ?
-from transition.transition import Transition
+from .transition import Transition
 import torch
 
 
+# maybe inherit from nn.module ?
+
 class TransitionBasedParser:
-    def __init__(self, neural_network, transition: Transition, configuration, features_computer, dynamic_oracle):
-        self.config = configuration
+    def __init__(self, neural_network, transition: Transition, features_computer, dynamic_oracle):
+        self.config = None
         self.parser_neural_network = neural_network
         self.transition = transition
         self.features_computer = features_computer
         self.dynamic_oracle = dynamic_oracle
 
-    def parse(self, features):
+    def parse(self, features, config):
         '''
         Parse one sentence
         TO-DO: Make it batchable
-
         :param features: embedding from features extractor
+        :param config:
         :return:
         '''
+        self.config = config
         self.config.add_features(features)
         # To do: Do this at batch level.
         while not self.config.is_terminal():
@@ -43,7 +45,7 @@ class TransitionBasedParser:
         :param decision_score:
         :return:
         '''
-        # order decision from most likely to least likely
+        # order decision from most likely to the least likely
         _, best_decision = torch.sort(decision_score, descending=True)
         # Apply first best applicable decision
         for d in best_decision:

@@ -1,5 +1,5 @@
-from dynamic_oracle import DynamicOracle
-from gold_configuration import GoldConfiguration, Word
+from .dynamic_oracle import DynamicOracle
+from .gold_configuration import GoldConfiguration, Word
 from parsebrain.processing.dependency_parsing.transition_based.transition import ArcEagerTransition
 """
 Need to think how to cleanly deal 
@@ -17,7 +17,7 @@ class DynamicOracleArcEager(DynamicOracle):
         '''
         Compute the next oracle move from current configuration and the gold configuration
 
-        >>> from parsebrain.processing.dependency_parsing.transition_based.transition.Configuration import Configuration
+        >>> from parsebrain.processing.dependency_parsing.transition_based.transition import Configuration
         >>> from parsebrain.processing.dependency_parsing.transition_based.transition import ArcEagerTransition
         >>> config = Configuration()
         >>> config.buffer_string = [Word("j",1),Word("ai",2),Word("vu",3),
@@ -64,7 +64,7 @@ class DynamicOracleArcEager(DynamicOracle):
         (k, l′, b) or (b, l′, k) such that k ∈ s|σ.
         (SH; c = (σ, b|β, A), Gg) = {(k, l′, b) ∈ Ag |k ∈ σ} ∪ {(b, l′, k) ∈ Ag |k ∈ σ}
 
-        >>> from parsebrain.processing.dependency_parsing.transition_based.transition.Configuration import Configuration
+        >>> from parsebrain.processing.dependency_parsing.transition_based.transition import Configuration
         >>> from parsebrain.processing.dependency_parsing.transition_based.transition import ArcEagerTransition
         >>> config = Configuration()
         >>> config.buffer_string = [Word("j",1),Word("ai",2),Word("vu",3),
@@ -110,7 +110,7 @@ class DynamicOracleArcEager(DynamicOracle):
         for by a previous (erroneous) RIGHT-ARCl transition when s acquired its head.
         (RE; c = (σ|s, β, A), Gg) = {(s, l′, k) ∈ Ag |k ∈ β}
 
-        >>> from parsebrain.processing.dependency_parsing.transition_based.transition.Configuration import Configuration
+        >>> from parsebrain.processing.dependency_parsing.transition_based.transition import Configuration
         >>> from parsebrain.processing.dependency_parsing.transition_based.transition import ArcEagerTransition
         >>> config = Configuration()
         >>> config.buffer_string = [Word("j",1),Word("ai",2),Word("vu",3),
@@ -159,7 +159,7 @@ class DynamicOracleArcEager(DynamicOracle):
         s but the real head is not in β (due to an erroneous previous transition) and there are no
         gold dependents of s in β.6
         (LAl ; c = (σ|s, b|β, A), Gg) = {(k, l′, s) ∈ Ag |k ∈ β} ∪ {(s, l′, k) ∈ Ag |k ∈ β}
-        >>> from parsebrain.processing.dependency_parsing.transition_based.transition.Configuration import Configuration
+        >>> from parsebrain.processing.dependency_parsing.transition_based.transition import Configuration
         >>> from parsebrain.processing.dependency_parsing.transition_based.transition import ArcEagerTransition
         >>> config = Configuration()
         >>> config.buffer_string = [Word("j",1),Word("ai",2),Word("vu",3),
@@ -216,7 +216,7 @@ class DynamicOracleArcEager(DynamicOracle):
         not in σ or β (due to an erroneous previous transition) and there are no gold dependents
         of b in σ.
         (RAl ; c = (σ|s, b|β, A), Gg) = {(k, l′, b) ∈ Ag |k ∈ σ ∨ k ∈ β} ∪ {(b, l′, k) ∈ Ag |k ∈ σ}
-        >>> from parsebrain.processing.dependency_parsing.transition_based.transition.Configuration import Configuration
+        >>> from parsebrain.processing.dependency_parsing.transition_based.transition import Configuration
         >>> from parsebrain.processing.dependency_parsing.transition_based.transition import ArcEagerTransition
         >>> config = Configuration()
         >>> config.buffer_string = [Word("j",1),Word("ai",2),Word("vu",3),
