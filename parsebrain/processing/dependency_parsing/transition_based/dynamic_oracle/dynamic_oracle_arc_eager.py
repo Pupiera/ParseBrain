@@ -38,7 +38,7 @@ class DynamicOracleArcEager(DynamicOracle):
         >>> while len(config.buffer) != 0:
         ...     decision = oracle.get_oracle_move_from_config_tree(config, config_gold)
         ...     list_decision.append(decision)
-        ...     config = transiton.apply_decision(decision, config)
+        ...     config = transiton._apply_decision(decision, config)
         >>> print(list_decision)
         [0, 0, 1, 0, 0, 1, 1, 1, 0, 2, 3, 2, 0, 2, 2, 3, 3, 1, 2]
         >>>

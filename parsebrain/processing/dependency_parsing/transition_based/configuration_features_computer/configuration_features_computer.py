@@ -3,7 +3,7 @@ import itertools
 
 
 class ConfigurationFeaturesComputer:
-    def compute_feature(self, configuration):
+    def compute_feature(self, configuration, device):
         raise NotImplementedError
 
 
@@ -41,10 +41,11 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         self.stack_depth = stack_depth
         self.dim = dim
 
-    def compute_feature(self, configuration):
+    def compute_feature(self, configuration, device):
         '''
         May need to change a few things with batched parser
         :param configuration:
+        :param device:
         :return:
         '''
         emb_buffer = configuration.buffer[0]
@@ -52,7 +53,7 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         if len(emb_stack) != self.stack_depth:  # Need to add blank tensor
             emb_stack = [x.unsqueeze(0) for x in emb_stack]
             emb_stack.append(torch.zeros((self.stack_depth - len(emb_stack), self.dim)))
-        emb_stack = torch.cat(emb_stack).view(-1)
+        emb_stack = torch.cat(emb_stack).view(-1).to(device)
         result = torch.cat((emb_buffer, emb_stack))
         return result
 
