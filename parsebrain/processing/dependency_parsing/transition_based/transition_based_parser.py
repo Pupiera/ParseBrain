@@ -12,7 +12,7 @@ class TransitionBasedParser:
         self.features_computer = features_computer
         self.dynamic_oracle = dynamic_oracle
 
-    def parse(self, features, config):
+    def parse(self, config):
         '''
         Parse one sentence
         TO-DO: Make it batchable
@@ -21,7 +21,6 @@ class TransitionBasedParser:
         :return:
         '''
         self.config = config
-        self.config.add_features(features)
         # To do: Do this at batch level.
         while not self.config.is_terminal():
             features = self.compute_features()  # is it really needed ?
