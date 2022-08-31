@@ -44,7 +44,11 @@ class ArcEagerTransition(Transition):
             raise ValueError(f"Decision {decision} out of scope for arc-eager transition")
 
     def is_terminal(self, config):
-        return not (len(config.buffer) == 0 and len(config.stack) == 0)
+        """
+        Condition is terminal if buffer is empty
+        (can't create any new arc if everything is on the stack)
+        """
+        return len(config.buffer) == 0
 
     @staticmethod
     def has_head(wi, arc):
