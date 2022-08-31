@@ -1,4 +1,4 @@
 from . import *
 from .arc_eager import ArcEagerTransition
-from .configuration import Configuration
+from parsebrain.processing.dependency_parsing.transition_based.configuration.configuration import Configuration
 from .transition import Transition

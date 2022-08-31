@@ -1,5 +1,5 @@
 from .dynamic_oracle import DynamicOracle
-from .gold_configuration import GoldConfiguration, Word
+from parsebrain.processing.dependency_parsing.transition_based.configuration import GoldConfiguration, Word
 from parsebrain.processing.dependency_parsing.transition_based.transition import ArcEagerTransition
 """
 Need to think how to cleanly deal 

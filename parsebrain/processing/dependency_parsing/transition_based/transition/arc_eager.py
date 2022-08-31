@@ -1,6 +1,6 @@
 from .transition import Transition
 from .arc import Right_Arc, Left_Arc
-from .configuration import Configuration
+from parsebrain.processing.dependency_parsing.transition_based.configuration import Configuration
 
 
 class ArcEagerTransition(Transition):
