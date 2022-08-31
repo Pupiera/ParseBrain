@@ -21,8 +21,9 @@ class Parser(sb.core.Brain):
         print(tokens)
         print(tokens.shape)
         features = self.extract_features(batch)
-
-        parse, decision_score_history = self.parser.parse(features)
+        # Need to construct config for the current batch,
+        config = None
+        parse, decision_score_history = self.parser.parse(features, config)
         return parse, decision_score_history
 
     def compute_objectives(self, predictions, batch, stage):

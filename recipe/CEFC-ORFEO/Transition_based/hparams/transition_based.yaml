@@ -45,10 +45,12 @@ pretrained_lm_path: /home/getalp/pupiera/thesis/endtoend_asr_multitask/src/LM/ca
 tokenizer: !new:sentencepiece.SentencePieceProcessor
 
 
+embedding_dim: 768
+
 # LM
 lm_model: !new:speechbrain.lobes.models.transformer.TransformerLM.TransformerLM
   vocab: 32005 #Need to be the same as tranformer tokenizer (BPE). from tokenizer.vocab_size: 32005
-  d_model: 768 #base size
+  d_model: !ref <embedding_dim> #base size
   nhead: 12 # base
   num_encoder_layers: 12
   num_decoder_layers: 0
@@ -65,13 +67,61 @@ ckpt_interval_minutes: 30 # save checkpoint every N minutes
 
 
 #
+# Parser
+#
+
+neural_network: !new:speechbrain.nnet.containers.Sequential
+    input_shape: [null, null, 1024]
+    linear1: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1024
+        bias: True
+    bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+    activation: !new:torch.nn.LeakyReLU
+    drop: !new:torch.nn.Dropout
+        p: 0.15
+    linear2: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1024
+        bias: True
+    bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
+    activation2: !new:torch.nn.LeakyReLU
+    drop2: !new:torch.nn.Dropout
+        p: 0.15
+    linear3: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1024
+        bias: True
+    bn3: !name:speechbrain.nnet.normalization.BatchNorm1d
+    activation3: !new:torch.nn.LeakyReLU
+    linear_head: !name:speechbrain.nnet.linear.Linear
+      n_neurons: !ref <number_transitions>
+      bias: True
+    log_softmax: !new:speechbrain.nnet.activations.Softmax
+      apply_log: True
+
+
+number_transitions: 4
+
+transition: !new:parsebrain.processing.dependency_parsing.transition_based.transition.ArcEagerTransition
+
+features_computer: !new:parsebrain.processing.dependency_parsing.transition_based.configuration_features_computer.ConfigurationFeaturesComputerConcat
+  stack_depth: 3
+  dim: !ref <embedding_dim>
+
+dynamic_oracle: !new:parsebrain.processing.dependency_parsing.transition_based.dynamic_oracle.DynamicOracleArcEager
+
+parser: !new:parsebrain.processing.dependency_parsing.transition_based.TransitionBasedParser
+  neural_network: !ref <neural_network>
+  transition: !ref <transition>
+  features_computer: !ref <features_computer>
+  dynamic_oracle: !ref <dynamic_oracle>
+
+
+
+
+#
 # Functions and classes
 #
 epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
   limit: !ref <number_of_epochs>
-
-
-
 
 modules:
   lm_model: !ref <lm_model>
