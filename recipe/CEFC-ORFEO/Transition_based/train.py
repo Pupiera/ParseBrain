@@ -9,21 +9,19 @@ from hyperpyyaml import load_hyperpyyaml
 from speechbrain.utils.distributed import run_on_main
 import parsebrain as pb  # extension of speechbrain
 import torch
-
+from parsebrain.processing.dependency_parsing.transition_based.configuration import Configuration, GoldConfiguration, Word
+from torch.nn.utils.rnn import pad_sequence
 
 class Parser(sb.core.Brain):
 
     def compute_forward(self, batch, stage):
-        print(batch)
-        print(batch.tokens)
-        print(batch.tokens_conllu)
         tokens = batch.tokens.data
-        print(tokens)
-        print(tokens.shape)
-        features = self.extract_features(batch)
-        # Need to construct config for the current batch,
-        config = None
-        parse, decision_score_history = self.parser.parse(features, config)
+        tokens = tokens.to(self.device)
+        tokens_conllu = batch.tokens_conllu.data.to(self.device)
+        features = self.extract_features(tokens, tokens_conllu).to(self.device)
+        words_list = self.create_words_list(batch.words)
+        config = Configuration(features, words_list)
+        parse, decision_score_history = self.hparams.parser.parse(config)
         return parse, decision_score_history
 
     def compute_objectives(self, predictions, batch, stage):
@@ -31,10 +29,26 @@ class Parser(sb.core.Brain):
         parse, decision_score_history = predictions
         raise NotImplementedError
 
-    # if stage == sb.Stage.TRAIN:
+    def get_last_subword_emb(self, emb, words_end_position):
+        newEmb = []
+        print(emb.shape)
+        print(words_end_position.shape)
+        for b_e, b_w_end in zip(emb, words_end_position):
+            newEmb.append(b_e[b_w_end])
+        return pad_sequence(newEmb, batch_first=True)
 
-    def extract_features(self, batch):
-        raise NotImplementedError
+
+    def extract_features(self, tokens, words_end_position):
+        features = self.hparams.lm_model.get_embeddings(tokens)
+        print(features)
+        print(words_end_position)
+        return self.get_last_subword_emb(features, words_end_position)
+    
+    def create_words_list(self, words):
+        words_list = []
+        for i, w in enumerate(words):
+            words_list.append(Word(w, i+1))
+        return words_list
 
 
 # Define custom data procedure
@@ -62,11 +76,11 @@ def dataio_prepare(hparams, tokenizer):
     # 2. Define text pipeline:
     @sb.utils.data_pipeline.takes("words")
     @sb.utils.data_pipeline.provides(
-        "tokens_list", "tokens_bos", "tokens_eos", "tokens", "tokens_conllu"
+        "words", "tokens_list", "tokens_bos", "tokens_eos", "tokens", "tokens_conllu"
     )
     def text_pipeline(words):
         wrd = " ".join(words)
-        print(wrd)
+        yield words
         tokens_list = tokenizer.encode_as_ids(wrd)
         yield tokens_list
         tokens_bos = torch.LongTensor([hparams["bos_index"]] + (tokens_list))
@@ -78,14 +92,23 @@ def dataio_prepare(hparams, tokenizer):
         tokens_conllu = []
         for i, str in enumerate(words):
             tokens_conllu.extend([i+1]*len(tokenizer.encode_as_ids(str)))
-        tokens_conllu = torch.LongTensor(tokens_conllu)
+        x = []
+        y = 0
+        for t_c in reversed(tokens_conllu):
+            if t_c != y :
+                x.append(True)
+                y = t_c
+            else:
+                x.append(False)
+        x.reverse()
+        tokens_conllu = torch.BoolTensor(x)
         yield tokens_conllu
 
     sb.dataio.dataset.add_dynamic_item(datasets, text_pipeline)
 
     # 3. Set output:
     sb.dataio.dataset.set_output_keys(
-        datasets, ["tokens_bos", "tokens_eos", "tokens", "tokens_conllu"],
+        datasets, ["words","tokens_list","tokens_bos", "tokens_eos", "tokens", "tokens_conllu"],
     )
     return train_data, valid_data, test_data
 

@@ -7,7 +7,7 @@ save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
 
 #Data files
-data_folder: /home/pupiera/getalp/pupiera/conllu/gold #/home/getalp/data/ASR_data/FR/CORPUS_AUDIO/cefc-orfeo_v.1.5_december2021/11/oral
+data_folder: /home/getalp/pupiera/thesis/endtoend_asr_multitask/src/conllu/gold/ #/home/pupiera/getalp/pupiera/conllu/gold
 train_conllu: !ref <data_folder>/orfeo_shuf.train
 valid_conllu: !ref <data_folder>/orfeo_shuf.dev
 test_conllu: !ref <data_folder>/orfeo_shuf.test
@@ -21,8 +21,8 @@ conllu_keys: [ 'lineNumber', 'words', 'lemmas','POS','UPOS','tags',
 # With data_parallel batch_size is split into N jobs
 # With DDP batch_size is multiplied by N jobs
 # Must be 6 per GPU to fit 16GB of VRAM
-batch_size: 8
-test_batch_size: 4
+batch_size: 1 #8
+test_batch_size: 1 #4
 
 dataloader_options:
   batch_size: !ref <batch_size>
@@ -48,7 +48,7 @@ tokenizer: !new:sentencepiece.SentencePieceProcessor
 embedding_dim: 768
 
 # LM
-lm_model: !new:speechbrain.lobes.models.transformer.TransformerLM.TransformerLM
+lm_model: !new:parsebrain.speechbrain_custom.lobes.models.transformer.transformerLM.TransformerLM
   vocab: 32005 #Need to be the same as tranformer tokenizer (BPE). from tokenizer.vocab_size: 32005
   d_model: !ref <embedding_dim> #base size
   nhead: 12 # base
