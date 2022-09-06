@@ -30,6 +30,7 @@ class TransitionBasedParser:
         return list_decision_taken
 
     def _decision_score(self, x):
+        x = x.unsqueeze(0) #simulate batch for the moment
         return self.parser_neural_network(x)
 
     def _compute_features(self, config):
@@ -50,6 +51,7 @@ class TransitionBasedParser:
         '''
         # order decision from most likely to the least likely
         _, best_decision = torch.sort(decision_score, descending=True)
+        best_decision = best_decision.squeeze()
         # Apply first best applicable decision
         for d in best_decision:
             if self.transition.is_decision_valid(d, config):
