@@ -71,25 +71,25 @@ ckpt_interval_minutes: 30 # save checkpoint every N minutes
 #
 
 neural_network: !new:speechbrain.nnet.containers.Sequential
-    input_shape: [null, null, 1024]
+    input_shape: [null, null, 3072]
     linear1: !name:speechbrain.nnet.linear.Linear
-        n_neurons: 1024
+        n_neurons: 2048
         bias: True
-    bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+        #bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
     activation: !new:torch.nn.LeakyReLU
     drop: !new:torch.nn.Dropout
         p: 0.15
     linear2: !name:speechbrain.nnet.linear.Linear
         n_neurons: 1024
         bias: True
-    bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
+        #bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
     activation2: !new:torch.nn.LeakyReLU
     drop2: !new:torch.nn.Dropout
         p: 0.15
     linear3: !name:speechbrain.nnet.linear.Linear
         n_neurons: 1024
         bias: True
-    bn3: !name:speechbrain.nnet.normalization.BatchNorm1d
+        #bn3: !name:speechbrain.nnet.normalization.BatchNorm1d
     activation3: !new:torch.nn.LeakyReLU
     linear_head: !name:speechbrain.nnet.linear.Linear
       n_neurons: !ref <number_transitions>
@@ -125,9 +125,10 @@ epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
 
 modules:
   lm_model: !ref <lm_model>
+  parser: !ref <neural_network>
 
 model: !new:torch.nn.ModuleList
-  - [ !ref <lm_model> ]
+  - [ !ref <lm_model>, !ref <neural_network> ]
 #
 # Metrics
 #
