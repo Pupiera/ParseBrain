@@ -130,7 +130,9 @@ class ArcEagerTransition(Transition):
 
     @staticmethod
     def right_arc_condition(config):
-        return True
+        if len(config.stack) > 0 and len(config.buffer) > 0:
+            return True
+        return False
 
     @staticmethod
     def right_arc(config):
