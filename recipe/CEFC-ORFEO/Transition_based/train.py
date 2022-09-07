@@ -36,6 +36,47 @@ class Parser(sb.core.Brain):
         loss = self.hparams.parse_cost(parse, dynamic_oracle_decision)
         return loss
 
+    def init_optimizers(self):
+        "Initializes the model optimizer"
+        self.model_optimizer = self.hparams.model_opt_class(
+            self.hparams.model.parameters()
+        )
+
+        if self.checkpointer is not None:
+            self.checkpointer.add_recoverable(
+                "wav2vec_opt", self.wav2vec_optimizer
+            )
+            self.checkpointer.add_recoverable("modelopt", self.model_optimizer)
+
+    def fit_batch(self, batch):
+        """Train the parameters given a single batch in input"""
+        if self.auto_mix_prec:
+
+            self.model_optimizer.zero_grad()
+
+            with torch.cuda.amp.autocast():
+                outputs = self.compute_forward(batch, sb.Stage.TRAIN)
+                loss = self.compute_objectives(outputs, batch, sb.Stage.TRAIN)
+
+            self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.model_optimizer)
+
+            if self.check_gradients(loss):
+                self.scaler.step(self.adam_optimizer)
+
+            self.scaler.update()
+        else:
+            outputs = self.compute_forward(batch, sb.Stage.TRAIN)
+
+            loss = self.compute_objectives(outputs, batch, sb.Stage.TRAIN)
+            loss.backward()
+            if self.check_gradients(loss):
+                self.model_optimizer.step()
+
+            self.model_optimizer.zero_grad()
+
+        return loss.detach()
+
     def get_last_subword_emb(self, emb, words_end_position):
         newEmb = []
         for b_e, b_w_end in zip(emb, words_end_position):
