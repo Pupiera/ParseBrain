@@ -21,10 +21,11 @@ class TransitionBasedParser:
         :param config:
         :return:
         '''
-        # To do: Do this at batch level.
+        # To do: Do this at batch level. or not ?
         self.device = config.buffer.get_device()
         list_decision_taken = []
         dynamic_oracle_decision = []
+        config.buffer = config.buffer.squeeze()
         while not self._is_terminal(config):
             features = self._compute_features(config)
             decision_score = self._decision_score(features)  # size = number of transitions

@@ -19,14 +19,16 @@ class Parser(sb.core.Brain):
         tokens = tokens.to(self.device)
         tokens_conllu = batch.tokens_conllu.data.to(self.device)
         features = self.extract_features(tokens, tokens_conllu).to(self.device)
-        words_list = self.create_words_list(batch.words)
+        words_list = self.create_words_list(batch.words[0]) # batch of size 1
         config = Configuration(features, words_list)
-        gold_config = batch.gold_config
+        gold_config = GoldConfiguration(batch.HEAD[0])
         if sb.Stage.TRAIN == stage:
-            parse, decision_score_history = self.hparams.parser.parse(config, stage, gold_config)
+            parse, dynamic_oracle_decision =\
+                self.hparams.parser.parse(config, stage, gold_config)
         else:
-            parse, decision_score_history = self.hparams.parser.parse(config, stage)
-        return parse, decision_score_history
+            parse, dynamic_oracle_decision =\
+                self.hparams.parser.parse(config, stage)
+        return parse, dynamic_oracle_decision
 
     def compute_objectives(self, predictions, batch, stage):
         # compute loss : Need to compute predictions (list of gold transitions)
@@ -35,8 +37,6 @@ class Parser(sb.core.Brain):
 
     def get_last_subword_emb(self, emb, words_end_position):
         newEmb = []
-        print(emb.shape)
-        print(words_end_position.shape)
         for b_e, b_w_end in zip(emb, words_end_position):
             newEmb.append(b_e[b_w_end])
         return pad_sequence(newEmb, batch_first=True)
@@ -44,8 +44,6 @@ class Parser(sb.core.Brain):
 
     def extract_features(self, tokens, words_end_position):
         features = self.hparams.lm_model.get_embeddings(tokens)
-        print(features)
-        print(words_end_position)
         return self.get_last_subword_emb(features, words_end_position)
     
     def create_words_list(self, words):
@@ -111,20 +109,23 @@ def dataio_prepare(hparams, tokenizer):
     sb.dataio.dataset.add_dynamic_item(datasets, text_pipeline)
 
     @sb.utils.data_pipeline.takes("POS", "HEAD", "DEP")
-    @sb.utils.data_pipeline.provides("gold_config")
-    def syntax_pipeline(pos, gov, dep):
+    @sb.utils.data_pipeline.provides("POS", "HEAD", "DEP")
+    def syntax_pipeline(POS, HEAD, DEP):
         '''
         compute gold configuration here
         '''
-        gold_config = GoldConfiguration(gov)
-        yield gold_config
+        yield POS
+        yield HEAD
+        yield DEP
+        #gold_config = GoldConfiguration(HEAD)
+        #yield gold_config
 
-    sb.dataio.dataset.add_dynamic_item(datasets, syntax_pipeline())
+    sb.dataio.dataset.add_dynamic_item(datasets, syntax_pipeline)
 
 
     # 3. Set output:
     sb.dataio.dataset.set_output_keys(
-        datasets, ["words","tokens_list","tokens_bos", "tokens_eos", "tokens", "tokens_conllu", "gold_config"],
+        datasets, ["words","tokens_list","tokens_bos", "tokens_eos", "tokens", "tokens_conllu", "POS", "HEAD", "DEP"],
     )
     return train_data, valid_data, test_data
 
