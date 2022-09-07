@@ -24,6 +24,7 @@ class TransitionBasedParser:
         # To do: Do this at batch level. or not ?
         self.device = config.buffer.get_device()
         list_decision_taken = []
+        list_decision_score = []
         dynamic_oracle_decision = []
         config.buffer = config.buffer.squeeze()
         while not self._is_terminal(config):
@@ -33,8 +34,11 @@ class TransitionBasedParser:
                 dynamic_oracle_decision.append(
                     self.dynamic_oracle.get_oracle_move_from_config_tree(config, gold_config ))
             config, decision_taken = self._apply_decision(decision_score, config)
+            list_decision_score.append(decision_score)
             list_decision_taken.append(decision_taken)
-        return list_decision_taken, dynamic_oracle_decision
+        print(list_decision_score)
+        print(dynamic_oracle_decision)
+        return torch.cat(list_decision_score).to(self.device), list_decision_taken,  torch.tensor(dynamic_oracle_decision).to(self.device)
 
     def _decision_score(self, x):
         x = x.unsqueeze(0) #simulate batch for the moment

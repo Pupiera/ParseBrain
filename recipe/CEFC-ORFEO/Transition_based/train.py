@@ -23,17 +23,18 @@ class Parser(sb.core.Brain):
         config = Configuration(features, words_list)
         gold_config = GoldConfiguration(batch.HEAD[0])
         if sb.Stage.TRAIN == stage:
-            parse, dynamic_oracle_decision =\
+            parse_log_prob, parse,  dynamic_oracle_decision =\
                 self.hparams.parser.parse(config, stage, gold_config)
         else:
-            parse, dynamic_oracle_decision =\
+            parse_log_prob, parse, dynamic_oracle_decision =\
                 self.hparams.parser.parse(config, stage)
-        return parse, dynamic_oracle_decision
+        return parse_log_prob, dynamic_oracle_decision
 
     def compute_objectives(self, predictions, batch, stage):
         # compute loss : Need to compute predictions (list of gold transitions)
-        parse, decision_score_history = predictions
-        raise NotImplementedError
+        parse, dynamic_oracle_decision = predictions
+        loss = self.hparams.parse_cost(parse, dynamic_oracle_decision)
+        return loss
 
     def get_last_subword_emb(self, emb, words_end_position):
         newEmb = []
