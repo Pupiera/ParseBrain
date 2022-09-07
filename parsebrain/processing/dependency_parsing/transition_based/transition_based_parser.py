@@ -1,8 +1,10 @@
 from .transition import Transition
 import torch
-
+import speechbrain as sb
 
 # maybe inherit from nn.module ?
+# ToDo Need to find a clean way to introduce the dynamic oracle. Extremely important to get good supervision
+
 
 class TransitionBasedParser:
     def __init__(self, neural_network, transition: Transition, features_computer, dynamic_oracle):
@@ -12,7 +14,7 @@ class TransitionBasedParser:
         self.dynamic_oracle = dynamic_oracle
         self.device = None
 
-    def parse(self, config):
+    def parse(self, config, stage, gold_config=None):
         '''
         Parse one sentence
         TO-DO: Make it batchable
@@ -22,12 +24,16 @@ class TransitionBasedParser:
         # To do: Do this at batch level.
         self.device = config.buffer.get_device()
         list_decision_taken = []
+        dynamic_oracle_decision = []
         while not self._is_terminal(config):
-            features = self._compute_features(config)  # is it really needed ?
+            features = self._compute_features(config)
             decision_score = self._decision_score(features)  # size = number of transitions
+            if stage == sb.Stage.TRAIN and gold_config is not None:
+                dynamic_oracle_decision.append(
+                    self.dynamic_oracle.get_oracle_move_from_config_tree(config, gold_config ))
             config, decision_taken = self._apply_decision(decision_score, config)
             list_decision_taken.append(decision_taken)
-        return list_decision_taken
+        return list_decision_taken, dynamic_oracle_decision
 
     def _decision_score(self, x):
         x = x.unsqueeze(0) #simulate batch for the moment

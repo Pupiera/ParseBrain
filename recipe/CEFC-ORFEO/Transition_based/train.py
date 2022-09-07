@@ -3,13 +3,13 @@ Recipe for transition based parsing on the CEFC-ORFEO dataset.
 authors : Adrien PUPIER
 '''
 import sys
-
+import torch
 import speechbrain as sb
+import parsebrain as pb  # extension of speechbrain
 from hyperpyyaml import load_hyperpyyaml
 from speechbrain.utils.distributed import run_on_main
-import parsebrain as pb  # extension of speechbrain
-import torch
-from parsebrain.processing.dependency_parsing.transition_based.configuration import Configuration, GoldConfiguration, Word
+from parsebrain.processing.dependency_parsing.transition_based.configuration\
+    import Configuration, GoldConfiguration, Word
 from torch.nn.utils.rnn import pad_sequence
 
 class Parser(sb.core.Brain):
@@ -21,7 +21,11 @@ class Parser(sb.core.Brain):
         features = self.extract_features(tokens, tokens_conllu).to(self.device)
         words_list = self.create_words_list(batch.words)
         config = Configuration(features, words_list)
-        parse, decision_score_history = self.hparams.parser.parse(config)
+        gold_config = batch.gold_config
+        if sb.Stage.TRAIN == stage:
+            parse, decision_score_history = self.hparams.parser.parse(config, stage, gold_config)
+        else:
+            parse, decision_score_history = self.hparams.parser.parse(config, stage)
         return parse, decision_score_history
 
     def compute_objectives(self, predictions, batch, stage):
@@ -106,9 +110,21 @@ def dataio_prepare(hparams, tokenizer):
 
     sb.dataio.dataset.add_dynamic_item(datasets, text_pipeline)
 
+    @sb.utils.data_pipeline.takes("POS", "HEAD", "DEP")
+    @sb.utils.data_pipeline.provides("gold_config")
+    def syntax_pipeline(pos, gov, dep):
+        '''
+        compute gold configuration here
+        '''
+        gold_config = GoldConfiguration(gov)
+        yield gold_config
+
+    sb.dataio.dataset.add_dynamic_item(datasets, syntax_pipeline())
+
+
     # 3. Set output:
     sb.dataio.dataset.set_output_keys(
-        datasets, ["words","tokens_list","tokens_bos", "tokens_eos", "tokens", "tokens_conllu"],
+        datasets, ["words","tokens_list","tokens_bos", "tokens_eos", "tokens", "tokens_conllu", "gold_config"],
     )
     return train_data, valid_data, test_data
 
