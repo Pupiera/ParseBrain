@@ -41,11 +41,7 @@ class Parser(sb.core.Brain):
         self.model_optimizer = self.hparams.model_opt_class(
             self.hparams.model.parameters()
         )
-
         if self.checkpointer is not None:
-            self.checkpointer.add_recoverable(
-                "wav2vec_opt", self.wav2vec_optimizer
-            )
             self.checkpointer.add_recoverable("modelopt", self.model_optimizer)
 
     def fit_batch(self, batch):
