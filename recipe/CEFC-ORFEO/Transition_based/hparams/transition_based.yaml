@@ -116,7 +116,7 @@ parser: !new:parsebrain.processing.dependency_parsing.transition_based.Transitio
 
 parse_cost: !name:speechbrain.nnet.losses.nll_loss
 
-model_opt: !name:torch.optim.Adadelta
+model_opt_class: !name:torch.optim.Adadelta
   lr: !ref <lr>
   rho: 0.95
   eps: 1.e-8
