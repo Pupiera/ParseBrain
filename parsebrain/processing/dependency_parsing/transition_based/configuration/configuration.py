@@ -54,4 +54,4 @@ class Word:
         self.position = position
 
     def __str__(self):
-        return f" Word (word :{word}, position : {position})"
+        return f" Word (word :{self.word}, position : {self.position})"
