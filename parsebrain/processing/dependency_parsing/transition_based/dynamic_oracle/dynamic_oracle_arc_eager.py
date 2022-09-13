@@ -44,6 +44,9 @@ class DynamicOracleArcEager(DynamicOracle):
         >>>
 
         '''
+        #print(f"{[str(w) for w in configuration.buffer_string]}")
+        if len(configuration.buffer) == 0: #if config is terminal with Arc eager:
+            return -1 # padding
         decision_cost = [self.compute_shift_cost(configuration, gold_configuration)
                          + int(not ArcEagerTransition.shift_condition(configuration)) * 99999,
                          self.compute_left_arc_cost(configuration, gold_configuration)

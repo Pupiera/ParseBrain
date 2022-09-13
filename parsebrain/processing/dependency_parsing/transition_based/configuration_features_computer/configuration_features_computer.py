@@ -48,11 +48,18 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         :param device:
         :return:
         '''
-        emb_buffer = configuration.buffer[0]
+        if configuration.buffer.dim() > 2: #is it batched ?
+            emb_buffer = configuration.buffer[0][0] # for batch of size 1 Temporary solution
+        else:
+            try:
+                emb_buffer = configuration.buffer[0]
+            except IndexError:
+                emb_buffer = torch.zeros(self.dim).to(device)
         emb_stack = configuration.stack[-self.stack_depth:]  # maybe reverse it ?
         if len(emb_stack) != self.stack_depth:  # Need to add blank tensor
             emb_stack = [x.unsqueeze(0) for x in emb_stack]
-            emb_stack.append(torch.zeros((self.stack_depth - len(emb_stack), self.dim)))
+            emb_stack.append(torch.zeros((self.stack_depth - len(emb_stack), self.dim)).to(device))
+
         emb_stack = torch.cat(emb_stack).view(-1).to(device)
         result = torch.cat((emb_buffer, emb_stack))
         return result

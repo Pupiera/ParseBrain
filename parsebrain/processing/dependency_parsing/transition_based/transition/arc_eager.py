@@ -20,6 +20,13 @@ class ArcEagerTransition(Transition):
                 "RIGHT": self.RIGHT}
 
     def apply_decision(self, decision, config):
+        '''
+        apply the given decision
+        In case where the state is terminal do nothing (Padding)
+        '''
+        if self.is_terminal(config):
+            return config
+
         if decision == self.SHIFT:
             return self.shift(config)
         elif decision == self.REDUCE:

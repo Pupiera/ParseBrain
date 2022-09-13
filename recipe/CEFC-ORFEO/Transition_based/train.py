@@ -18,10 +18,21 @@ class Parser(sb.core.Brain):
         tokens = batch.tokens.data
         tokens = tokens.to(self.device)
         tokens_conllu = batch.tokens_conllu.data.to(self.device)
-        features = self.extract_features(tokens, tokens_conllu).to(self.device)
-        words_list = self.create_words_list(batch.words[0]) # batch of size 1
-        config = Configuration(features, words_list)
-        gold_config = GoldConfiguration(batch.HEAD[0])
+        features = self.extract_features(tokens, tokens_conllu)
+        words_list = []
+        config = []
+        gold_config = []
+        for wrds, feat, head in zip(batch.words, features, batch.HEAD):
+            #words_list.append(self.create_words_list(wrds))
+            config.append(Configuration(feat, self.create_words_list(wrds)))
+            gold_config.append(GoldConfiguration(head))
+        #print(f"{[[str(x) for x in conf.buffer_string] for conf in config]}")
+        #print(f"{[config[i].buffer.shape for i in range(len(config))]}")
+        #print(f"{[gc.heads for gc in gold_config]}")
+        #print(gold_config[0].heads)
+        #words_list = self.create_words_list(batch.words[0]) # batch of size 1
+        #config = Configuration(features, words_list)
+        #gold_config = GoldCorfiguration(batch.HEAD[0])
         if sb.Stage.TRAIN == stage:
             parse_log_prob, parse,  dynamic_oracle_decision =\
                 self.hparams.parser.parse(config, stage, gold_config)
@@ -32,8 +43,12 @@ class Parser(sb.core.Brain):
 
     def compute_objectives(self, predictions, batch, stage):
         # compute loss : Need to compute predictions (list of gold transitions)
-        parse, dynamic_oracle_decision = predictions
-        loss = self.hparams.parse_cost(parse, dynamic_oracle_decision)
+        parse_log_prob, dynamic_oracle_decision = predictions
+        #print(parse_log_prob)
+        #print(parse_log_prob.shape) #should be [batch, nb_decision_taken, nb_transition]
+        #print(dynamic_oracle_decision)
+        #print(dynamic_oracle_decision.shape) # should be [batch, nb_decision_taken]
+        loss = self.hparams.parse_cost(parse_log_prob, dynamic_oracle_decision)
         return loss
 
     def init_optimizers(self):
@@ -76,8 +91,9 @@ class Parser(sb.core.Brain):
     def get_last_subword_emb(self, emb, words_end_position):
         newEmb = []
         for b_e, b_w_end in zip(emb, words_end_position):
-            newEmb.append(b_e[b_w_end])
-        return pad_sequence(newEmb, batch_first=True)
+            newEmb.append(b_e[b_w_end].to(self.device))
+        return newEmb
+        #return pad_sequence(newEmb, batch_first=True)
 
 
     def extract_features(self, tokens, words_end_position):
