@@ -21,8 +21,8 @@ conllu_keys: [ 'lineNumber', 'words', 'lemmas','POS','UPOS','tags',
 # With data_parallel batch_size is split into N jobs
 # With DDP batch_size is multiplied by N jobs
 # Must be 6 per GPU to fit 16GB of VRAM
-batch_size: 1 #8
-test_batch_size: 1 #4
+batch_size: 8 #8
+test_batch_size: 4 #4
 
 dataloader_options:
   batch_size: !ref <batch_size>
@@ -74,22 +74,22 @@ neural_network: !new:speechbrain.nnet.containers.Sequential
     input_shape: [null, null, 3072]
     linear1: !name:speechbrain.nnet.linear.Linear
         n_neurons: 2048
-        bias: True
-        #bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+        bias: True   
+    bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
     activation: !new:torch.nn.LeakyReLU
     drop: !new:torch.nn.Dropout
         p: 0.15
     linear2: !name:speechbrain.nnet.linear.Linear
         n_neurons: 1024
         bias: True
-        #bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
+    bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
     activation2: !new:torch.nn.LeakyReLU
     drop2: !new:torch.nn.Dropout
         p: 0.15
     linear3: !name:speechbrain.nnet.linear.Linear
         n_neurons: 1024
         bias: True
-        #bn3: !name:speechbrain.nnet.normalization.BatchNorm1d
+    bn3: !name:speechbrain.nnet.normalization.BatchNorm1d
     activation3: !new:torch.nn.LeakyReLU
     linear_head: !name:speechbrain.nnet.linear.Linear
       n_neurons: !ref <number_transitions>
@@ -114,7 +114,9 @@ parser: !new:parsebrain.processing.dependency_parsing.transition_based.Transitio
   features_computer: !ref <features_computer>
   dynamic_oracle: !ref <dynamic_oracle>
 
-parse_cost: !name:speechbrain.nnet.losses.nll_loss
+parse_cost: !new:torch.nn.NLLLoss
+  ignore_index: -1
+  reduction: "mean"
 
 model_opt_class: !name:torch.optim.Adadelta
   lr: !ref <lr>
@@ -157,4 +159,5 @@ pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
   paths:
     lm: !ref <pretrained_lm_path>/pytorch_model.bin # Camembert
     tokenizer: !ref <pretrained_lm_path>/sentencepiece.bpe.model # Camembert
+
 

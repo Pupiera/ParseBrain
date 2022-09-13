@@ -48,7 +48,13 @@ class Parser(sb.core.Brain):
         #print(parse_log_prob.shape) #should be [batch, nb_decision_taken, nb_transition]
         #print(dynamic_oracle_decision)
         #print(dynamic_oracle_decision.shape) # should be [batch, nb_decision_taken]
-        loss = self.hparams.parse_cost(parse_log_prob, dynamic_oracle_decision)
+        #mask = dynamic_oracle_decision != -1
+        #print(mask)
+        loss = self.hparams.parse_cost(torch.transpose(parse_log_prob, 1, -1), dynamic_oracle_decision)
+        if loss >100:
+            print(batch.words)
+            print(parse_log_prob)
+            print(dynamic_oracle_decision)
         return loss
 
     def init_optimizers(self):
