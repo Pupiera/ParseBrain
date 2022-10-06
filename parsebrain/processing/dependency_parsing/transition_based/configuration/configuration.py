@@ -24,30 +24,25 @@ class GoldConfiguration:
     It only uses the position of the word in the sentence to identify them.
     This remove the ambiguity if there is multiple occurrence of the same word.
     '''
-
-    def __init__(self):
+    def __init__(self, gov=None, label=None):
         self.heads = {}  # the head of a given word
         self.deps = defaultdict(lambda: [])  # the list of dependent of a given word (can be empty)
+        if gov is not None:
+            for i, g in enumerate(gov):
+                self.heads[i + 1] = g
+            deps = []
+            for i, _ in enumerate(gov):
+                tmp = []
+                for y, gg in enumerate(gov):
+                    if i+1 == gg:
+                        tmp.append(y+1)
+            for i, d in enumerate(deps):
+                self.deps[i + 1] = d
+        if label is not None:
+            self.label = {}  # the label between words i and the head.
+            for i, l in enumerate(label):
+                self.label[i + 1] = l
 
-    def __init__(self, gov):
-        self.heads = {}  # the head of a given word
-        self.deps = defaultdict(lambda: [])  # the list of dependent of a given word (can be empty)
-        for i, g in enumerate(gov):
-            self.heads[i + 1] = g
-        deps = []
-        for i, _ in enumerate(gov):
-            tmp = []
-            for y, gg in enumerate(gov):
-                if i+1 == gg:
-                    tmp.append(y+1)
-        for i, d in enumerate(deps):
-            self.deps[i + 1] = d
-
-    def __init__(self, gov, label):
-        self.__init__(gov)
-        self.label = {} # the label between words i and the head.
-        for i, l in enumerate(label):
-            self.label[i + 1] = l
 
 class Word:
     '''
