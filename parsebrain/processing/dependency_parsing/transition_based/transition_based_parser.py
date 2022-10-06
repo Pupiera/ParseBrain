@@ -50,7 +50,7 @@ class TransitionBasedParser:
             list_decision_taken.append(decision_taken)
 
             # Based on the decision taken, create feature then compute the label
-            label_score = self.label_policie.compute_label(config, decision_taken)  # Maybe add the decision ?
+            label_score = self._compute_label(config, decision_taken)  # Maybe add the decision ?
             for i, l_score in enumerate(label_score):
                 list_label_decision_score[i].append(l_score)
 
