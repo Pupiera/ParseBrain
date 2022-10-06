@@ -22,10 +22,10 @@ class Parser(sb.core.Brain):
         words_list = []
         config = []
         gold_config = []
-        for wrds, feat, head in zip(batch.words, features, batch.HEAD):
+        for wrds, feat, head, dep in zip(batch.words, features, batch.HEAD, batch.DEP):
             #words_list.append(self.create_words_list(wrds))
             config.append(Configuration(feat, self.create_words_list(wrds)))
-            gold_config.append(GoldConfiguration(head))
+            gold_config.append(GoldConfiguration(head, dep))
         #print(f"{[[str(x) for x in conf.buffer_string] for conf in config]}")
         #print(f"{[config[i].buffer.shape for i in range(len(config))]}")
         #print(f"{[gc.heads for gc in gold_config]}")
@@ -34,10 +34,10 @@ class Parser(sb.core.Brain):
         #config = Configuration(features, words_list)
         #gold_config = GoldCorfiguration(batch.HEAD[0])
         if sb.Stage.TRAIN == stage:
-            parse_log_prob, parse,  dynamic_oracle_decision =\
+            parse_log_prob, parse,  dynamic_oracle_decision, label_log_prob, dynamic_oracle_label =\
                 self.hparams.parser.parse(config, stage, gold_config)
         else:
-            parse_log_prob, parse, dynamic_oracle_decision =\
+            parse_log_prob, parse, dynamic_oracle_decision, label_log_prob, dynamic_oracle_label =\
                 self.hparams.parser.parse(config, stage)
         return parse_log_prob, dynamic_oracle_decision
 

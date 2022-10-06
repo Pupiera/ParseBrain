@@ -98,6 +98,27 @@ neural_network: !new:speechbrain.nnet.containers.Sequential
       apply_log: True
 
 
+neural_network_label: !new:speechbrain.nnet.containers.Sequential
+    input_shape: [null, null, 1536]
+    linear1: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1024
+        bias: True   
+    bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+    activation: !new:torch.nn.LeakyReLU
+    drop: !new:torch.nn.Dropout
+        p: 0.15
+    linear2: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1024
+        bias: True
+    bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
+    activation2: !new:torch.nn.LeakyReLU
+    linear_head: !name:speechbrain.nnet.linear.Linear
+      n_neurons: !ref <number_label>
+      bias: True
+    log_softmax: !new:speechbrain.nnet.activations.Softmax
+      apply_log: True
+
+number_label: 17      
 number_transitions: 4
 
 transition: !new:parsebrain.processing.dependency_parsing.transition_based.transition.ArcEagerTransition
@@ -108,11 +129,16 @@ features_computer: !new:parsebrain.processing.dependency_parsing.transition_base
 
 dynamic_oracle: !new:parsebrain.processing.dependency_parsing.transition_based.dynamic_oracle.DynamicOracleArcEager
 
+
+label_parser: !new:parsebrain.processing.dependency_parsing.transition_based.label.LabelPolicieEmbedding
+
 parser: !new:parsebrain.processing.dependency_parsing.transition_based.TransitionBasedParser
   neural_network: !ref <neural_network>
   transition: !ref <transition>
   features_computer: !ref <features_computer>
   dynamic_oracle: !ref <dynamic_oracle>
+  label_policie: !ref <label_parser>
+  label_neural_network: !ref <neural_network_label>
 
 parse_cost: !new:torch.nn.NLLLoss
   ignore_index: -1
@@ -132,9 +158,10 @@ epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
 modules:
   lm_model: !ref <lm_model>
   parser: !ref <neural_network>
+  label_parser: !ref <neural_network_label>
 
 model: !new:torch.nn.ModuleList
-  - [ !ref <lm_model>, !ref <neural_network> ]
+  - [ !ref <lm_model>, !ref <neural_network>, !ref <neural_network_label> ]
 #
 # Metrics
 #
@@ -159,5 +186,6 @@ pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
   paths:
     lm: !ref <pretrained_lm_path>/pytorch_model.bin # Camembert
     tokenizer: !ref <pretrained_lm_path>/sentencepiece.bpe.model # Camembert
+
 
 
