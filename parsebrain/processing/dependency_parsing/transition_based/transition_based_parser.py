@@ -137,6 +137,6 @@ class TransitionBasedParser:
                 else 0 for d in decision]
         batch_rep = []
         for c, d in zip(config, decision):
-            batch_rep.append(self.label_policie.compute_label(c, d))
+            batch_rep.append(self.label_policie.compute_representation(c, d))
         label_score = self.label_neural_network(torch.tensor(batch_rep))
         return label_score, mask
