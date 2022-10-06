@@ -1,1 +1,1 @@
-from label_policie import LabelPolicieEmbedding
+from .label_policie import LabelPolicieEmbedding
