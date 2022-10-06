@@ -32,7 +32,6 @@ class GoldConfiguration:
     def __init__(self, gov):
         self.heads = {}  # the head of a given word
         self.deps = defaultdict(lambda: [])  # the list of dependent of a given word (can be empty)
-
         for i, g in enumerate(gov):
             self.heads[i + 1] = g
         deps = []
@@ -43,6 +42,12 @@ class GoldConfiguration:
                     tmp.append(y+1)
         for i, d in enumerate(deps):
             self.deps[i + 1] = d
+
+    def __init__(self, gov, label):
+        self.__init__(gov)
+        self.label = {} # the label between words i and the head.
+        for i, l in enumerate(label):
+            self.label[i + 1] = l
 
 class Word:
     '''

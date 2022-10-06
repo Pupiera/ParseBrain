@@ -12,6 +12,8 @@ Need to think how to cleanly deal
 # Maybe need to rework the actions the parser can take in a specific config. ( to not have multiple implementation of
 # those rules)
 
+
+#todo : for the labels of the dependency, if arc does not exist in gold either: mask output or reinforce current pred
 class DynamicOracleArcEager(DynamicOracle):
     def get_oracle_move_from_config_tree(self, configuration, gold_configuration):
         '''
@@ -264,6 +266,27 @@ class DynamicOracleArcEager(DynamicOracle):
                 cost += 1
 
         return cost
+
+    def compute_label(self, configuration, gold_configuration, decision):
+        transition = ArcEagerTransition()
+        # get info of first element of stack
+        stack_pos = configuration.stack_string[0].position
+        # get info of first element of buffer
+        buffer_pos = configuration.buffer_string[0].position
+        # if decision is right arc, stack elt is head
+        if decision == transition.RIGHT:
+            # Check if this arc exist in gold config
+            if gold_configuration.heads[buffer_pos] == stack_pos:
+                return gold_configuration.label[buffer_pos]
+        # if decision is left arc, buffer elt is head
+        elif decision == transition.LEFT:
+            # Check if this arc exist in gold config
+            if gold_configuration.heads[stack_pos] == buffer_pos:
+                return gold_configuration.label[stack_pos]
+        # if not return -1 (reinforce current prediction of model)
+        return -1
+
+
 
 if __name__ == "__main__":
     import doctest

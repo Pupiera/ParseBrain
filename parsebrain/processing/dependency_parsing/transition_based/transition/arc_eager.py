@@ -19,6 +19,14 @@ class ArcEagerTransition(Transition):
                 "LEFT": self.LEFT,
                 "RIGHT": self.RIGHT}
 
+    def get_relation_from_decision(self, decision, config):
+        if decision == self.RIGHT:
+            return config.stack[0], config.buffer[0]
+        elif decision == self.LEFT:
+            return config.buffer[0], config.stack[0]
+        else: # if not valid, default = right
+            return config.stack[0], config.buffer[0]
+
     def apply_decision(self, decision, config):
         '''
         apply the given decision
