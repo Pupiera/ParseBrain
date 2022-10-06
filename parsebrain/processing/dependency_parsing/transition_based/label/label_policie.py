@@ -1,3 +1,4 @@
+import torch
 class LabelPolicie:
     '''
     This abstract class is used to setup different way of computing the label
@@ -17,6 +18,6 @@ class LabelPolicieEmbedding(LabelPolicie):
 
     def compute_representation(self, config, decision, transition):
         head, dependent = transition.get_relation_from_decision(decision, config)
-        rep = torch.cat(head, dependent)
+        rep = torch.cat((head, dependent))
         return rep
 

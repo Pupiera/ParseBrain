@@ -270,9 +270,15 @@ class DynamicOracleArcEager(DynamicOracle):
     def compute_label(self, configuration, gold_configuration, decision):
         transition = ArcEagerTransition()
         # get info of first element of stack
-        stack_pos = configuration.stack_string[0].position
+        try:
+            stack_pos = configuration.stack_string[0].position
+        except IndexError:
+            return -1
         # get info of first element of buffer
-        buffer_pos = configuration.buffer_string[0].position
+        try:
+            buffer_pos = configuration.buffer_string[0].position
+        except IndexError:
+            return -1
         # if decision is right arc, stack elt is head
         if decision == transition.RIGHT:
             # Check if this arc exist in gold config

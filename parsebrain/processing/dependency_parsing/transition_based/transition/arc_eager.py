@@ -1,7 +1,7 @@
 from .transition import Transition
 from .arc import Right_Arc, Left_Arc
 from parsebrain.processing.dependency_parsing.transition_based.configuration import Configuration
-
+import torch
 
 class ArcEagerTransition(Transition):
 
@@ -20,12 +20,22 @@ class ArcEagerTransition(Transition):
                 "RIGHT": self.RIGHT}
 
     def get_relation_from_decision(self, decision, config):
+        try:
+            stack = config.stack[0]
+        except IndexError:
+            device = config.buffer[0].device
+            stack = torch.zeros(config.buffer[0].size()).to(device) # toDo: putting this in config as it's own method. (remove torch in transition)
+        try:
+            buffer = config.buffer[0]
+        except IndexError:
+            device = config.stack[0].device
+            buffer = torch.zeros(config.stack[0].size()).to(device)
         if decision == self.RIGHT:
-            return config.stack[0], config.buffer[0]
+            return stack, buffer
         elif decision == self.LEFT:
-            return config.buffer[0], config.stack[0]
+            return buffer, stack
         else: # if not valid, default = right
-            return config.stack[0], config.buffer[0]
+            return stack, buffer
 
     def apply_decision(self, decision, config):
         '''
