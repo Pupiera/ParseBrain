@@ -25,7 +25,13 @@ class TransitionBasedParser:
         Parse one sentence
         TO-DO: Make it batchable
         :param config:
-        :return:
+        :return: A dictionary with the following key:
+        "decision_score": tensor log prob of each parsing decision (batch, seq, decision)
+        "decision_taken": tensor of each decision taken by the system after verification of applicability (batch, seq)
+        "oracle_parsing": tensor of best possible decision the model could have taken at this step
+        "label_score": tensor log prob of each label decision (batch, seq, label)
+        "oracle_label": tensor of best possible label the model should have taken at this step
+        "mask_label" : mask the label taken when it is not possible to take a label with the current parsing decision.
         '''
         self.device = config[0].buffer.get_device()
 
@@ -72,11 +78,13 @@ class TransitionBasedParser:
         list_decision_score = [torch.stack(x) for x in list_decision_score]
         list_decision_taken = [torch.stack(x) for x in list_decision_taken]
         list_label_decision_score = [torch.stack(x) for x in list_label_decision_score]
-        # print(list_decision_score)
-        return torch.stack(list_decision_score).to(self.device), torch.stack(list_decision_taken), torch.tensor(
-            dynamic_oracle_decision).to(self.device), torch.stack(list_label_decision_score).to(
-            self.device), torch.tensor(dynamic_oracle_label_decision).to(self.device), torch.tensor(list_mask_label).to(
-            self.device) == 1
+
+        return {"decision_score": torch.stack(list_decision_score).to(self.device),
+                "decision_taken": torch.stack(list_decision_taken),
+                "oracle_parsing": torch.tensor(dynamic_oracle_decision).to(self.device),
+                "label_score": torch.stack(list_label_decision_score).to(self.device),
+                "oracle_label": torch.tensor(dynamic_oracle_label_decision).to(self.device),
+                "mask_label": torch.tensor(list_mask_label).to(self.device) == 1}
 
     def _decision_score(self, x):
         return self.parser_neural_network(x)

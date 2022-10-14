@@ -170,6 +170,13 @@ model: !new:torch.nn.ModuleList
 # Metrics
 #
 
+
+#
+# CONLLU output file
+#
+
+file_valid: "Orfeo_Camembert_base_VALID"
+
 #
 # Checkpointer
 #

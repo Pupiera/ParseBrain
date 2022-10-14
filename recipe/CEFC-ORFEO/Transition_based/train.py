@@ -6,15 +6,17 @@ import sys
 
 import speechbrain as sb
 import torch
+import wandb
 from hyperpyyaml import load_hyperpyyaml
 from speechbrain.utils.distributed import run_on_main
 
 import parsebrain as pb  # extension of speechbrain
+from parsebrain.dataio.pred_to_file.pred_to_conllu import write_token_dict_conllu
+from parsebrain.processing.dependency_parsing.eval.conll18_ud_eval import evaluate_wrapper
 from parsebrain.processing.dependency_parsing.transition_based.configuration \
     import Configuration, GoldConfiguration, Word
 
 
-# ToDo : dict for label.
 # ToDo: num_workers back to 6 (0 for debugging)
 class Parser(sb.core.Brain):
 
@@ -30,21 +32,13 @@ class Parser(sb.core.Brain):
             # words_list.append(self.create_words_list(wrds))
             config.append(Configuration(feat, self.create_words_list(wrds)))
             gold_config.append(GoldConfiguration(head, dep))
-        # print(gold_config[0].label)
-        #print(f"{[[str(x) for x in conf.buffer_string] for conf in config]}")
-        #print(f"{[config[i].buffer.shape for i in range(len(config))]}")
-        #print(f"{[gc.heads for gc in gold_config]}")
-        #print(gold_config[0].heads)
-        #words_list = self.create_words_list(batch.words[0]) # batch of size 1
-        #config = Configuration(features, words_list)
-        #gold_config = GoldCorfiguration(batch.HEAD[0])
         if sb.Stage.TRAIN == stage:
-            parse_log_prob, parse, dynamic_oracle_decision, label_log_prob, dynamic_oracle_label, mask_label_decision = \
-                self.hparams.parser.parse(config, stage, gold_config)
+            parsing_dict = self.hparams.parser.parse(config, stage, gold_config)
         else:
-            parse_log_prob, parse, dynamic_oracle_decision, label_log_prob, dynamic_oracle_label, mask_label_decision = \
-                self.hparams.parser.parse(config, stage)
-        return parse_log_prob, parse, dynamic_oracle_decision, label_log_prob, dynamic_oracle_label, mask_label_decision
+            parsing_dict = self.hparams.parser.parse(config, stage)
+        return parsing_dict["decision_score"], parsing_dict["decision_taken"], \
+               parsing_dict["oracle_parsing"], parsing_dict["label_score"], \
+               parsing_dict["oracle_label"], parsing_dict["mask_label"]
 
     def compute_objectives(self, predictions, batch, stage):
         # compute loss : Need to compute predictions (list of gold transitions)
@@ -60,11 +54,27 @@ class Parser(sb.core.Brain):
         # Allow to compute label in a batch way.
         loss += self.hparams.label_cost(torch.transpose(label_log_prob, 1, -1), dynamic_oracle_label).masked_select(
             mask_label_decision).mean()
-        if loss > 100:
-            print(batch.words)
-            print(parse_log_prob)
-            print(dynamic_oracle_decision)
+
+        if sb.Stage.VALID == stage:
+            # what to do if tree is malformed ? dumb heursitics, attach to previous word ?
+            data = self.create_dict_from_pred(parse_log_prob, label_log_prob)
+            file_Valid = self.hparams.file_valid
+            write_token_dict_conllu(data, file_Valid)
         return loss
+
+    def on_stage_end(self, stage, stage_loss, epoch=None):
+        stage_stats = {"loss": stage_loss}
+        if stage == sb.Stage.VALID:  # metrics value
+            metrics = evaluate_wrapper({"system_file": self.hparams.file_valid,
+                                        "gold_file": self.hparams.valid_conllu})
+            stage_stats["LAS"] = metrics["LAS"].f1 * 100
+            stage_stats["UAS"] = metrics["UAS"].f1 * 100
+
+        if stage == sb.Stage.VALID:  # Optimization of learning rate, logging, checkpointing
+            wandb_stats = {"epoch": epoch}
+            wandb_stats = {**wandb_stats, **stage_stats}
+            wandb.log(wandb_stats)
+            self.checkpointer.save_and_keep_only(meta={"LAS": stage_stats["LAS"]}, max_keys=["LAS"])
 
     def init_optimizers(self):
         "Initializes the model optimizer"
