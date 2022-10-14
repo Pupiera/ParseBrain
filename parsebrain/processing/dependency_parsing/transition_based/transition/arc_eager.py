@@ -1,7 +1,9 @@
-from .transition import Transition
-from .arc import Right_Arc, Left_Arc
-from parsebrain.processing.dependency_parsing.transition_based.configuration import Configuration
 import torch
+
+from parsebrain.processing.dependency_parsing.transition_based.configuration import Configuration
+from .arc import Right_Arc, Left_Arc
+from .transition import Transition
+
 
 class ArcEagerTransition(Transition):
 
@@ -57,6 +59,8 @@ class ArcEagerTransition(Transition):
             raise ValueError(f"Decision number ({decision}) is out of scope for arc-eager transition")
 
     def is_decision_valid(self, decision, config):
+        if self.is_terminal(config):
+            return False
         if decision == self.SHIFT:
             return self.shift_condition(config)
         elif decision == self.REDUCE:

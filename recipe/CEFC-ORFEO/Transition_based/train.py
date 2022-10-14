@@ -3,15 +3,19 @@ Recipe for transition based parsing on the CEFC-ORFEO dataset.
 authors : Adrien PUPIER
 '''
 import sys
-import torch
+
 import speechbrain as sb
-import parsebrain as pb  # extension of speechbrain
+import torch
 from hyperpyyaml import load_hyperpyyaml
 from speechbrain.utils.distributed import run_on_main
-from parsebrain.processing.dependency_parsing.transition_based.configuration\
-    import Configuration, GoldConfiguration, Word
-from torch.nn.utils.rnn import pad_sequence
 
+import parsebrain as pb  # extension of speechbrain
+from parsebrain.processing.dependency_parsing.transition_based.configuration \
+    import Configuration, GoldConfiguration, Word
+
+
+# ToDo : dict for label.
+# ToDo: num_workers back to 6 (0 for debugging)
 class Parser(sb.core.Brain):
 
     def compute_forward(self, batch, stage):
@@ -22,10 +26,11 @@ class Parser(sb.core.Brain):
         words_list = []
         config = []
         gold_config = []
-        for wrds, feat, head, dep in zip(batch.words, features, batch.HEAD, batch.DEP):
-            #words_list.append(self.create_words_list(wrds))
+        for wrds, feat, head, dep in zip(batch.words, features, batch.head, batch.dep_tokens):
+            # words_list.append(self.create_words_list(wrds))
             config.append(Configuration(feat, self.create_words_list(wrds)))
             gold_config.append(GoldConfiguration(head, dep))
+        # print(gold_config[0].label)
         #print(f"{[[str(x) for x in conf.buffer_string] for conf in config]}")
         #print(f"{[config[i].buffer.shape for i in range(len(config))]}")
         #print(f"{[gc.heads for gc in gold_config]}")
@@ -34,24 +39,28 @@ class Parser(sb.core.Brain):
         #config = Configuration(features, words_list)
         #gold_config = GoldCorfiguration(batch.HEAD[0])
         if sb.Stage.TRAIN == stage:
-            parse_log_prob, parse,  dynamic_oracle_decision, label_log_prob, dynamic_oracle_label =\
+            parse_log_prob, parse, dynamic_oracle_decision, label_log_prob, dynamic_oracle_label, mask_label_decision = \
                 self.hparams.parser.parse(config, stage, gold_config)
         else:
-            parse_log_prob, parse, dynamic_oracle_decision, label_log_prob, dynamic_oracle_label =\
+            parse_log_prob, parse, dynamic_oracle_decision, label_log_prob, dynamic_oracle_label, mask_label_decision = \
                 self.hparams.parser.parse(config, stage)
-        return parse_log_prob, dynamic_oracle_decision
+        return parse_log_prob, parse, dynamic_oracle_decision, label_log_prob, dynamic_oracle_label, mask_label_decision
 
     def compute_objectives(self, predictions, batch, stage):
         # compute loss : Need to compute predictions (list of gold transitions)
-        parse_log_prob, dynamic_oracle_decision = predictions
-        #print(parse_log_prob)
-        #print(parse_log_prob.shape) #should be [batch, nb_decision_taken, nb_transition]
-        #print(dynamic_oracle_decision)
-        #print(dynamic_oracle_decision.shape) # should be [batch, nb_decision_taken]
-        #mask = dynamic_oracle_decision != -1
-        #print(mask)
-        loss = self.hparams.parse_cost(torch.transpose(parse_log_prob, 1, -1), dynamic_oracle_decision)
-        if loss >100:
+        parse_log_prob, parse, dynamic_oracle_decision, \
+        label_log_prob, dynamic_oracle_label, mask_label_decision = predictions
+
+        mask_parse = parse != -1  # Padded decision for structure of tree is marked with -1
+        # We compute the loss for each value, and we only keep the case where the decision was valid. (not batch padding)
+        # loss need log prob in form (Batch, class, seq)
+        loss = self.hparams.parse_cost(torch.transpose(parse_log_prob, 1, -1), dynamic_oracle_decision).masked_select(
+            mask_parse).mean()
+        # Compute the loss for each element based on decision and only keep relevant one.
+        # Allow to compute label in a batch way.
+        loss += self.hparams.label_cost(torch.transpose(label_log_prob, 1, -1), dynamic_oracle_label).masked_select(
+            mask_label_decision).mean()
+        if loss > 100:
             print(batch.words)
             print(parse_log_prob)
             print(dynamic_oracle_decision)
@@ -169,26 +178,36 @@ def dataio_prepare(hparams, tokenizer):
     sb.dataio.dataset.add_dynamic_item(datasets, text_pipeline)
 
     @sb.utils.data_pipeline.takes("POS", "HEAD", "DEP")
-    @sb.utils.data_pipeline.provides("POS", "HEAD", "DEP")
-    def syntax_pipeline(POS, HEAD, DEP):
+    @sb.utils.data_pipeline.provides("pos_tokens", "head", "dep_tokens")
+    def syntax_pipeline(pos, head, dep):
         '''
         compute gold configuration here
         '''
-        yield POS
-        yield HEAD
-        yield DEP
-        #gold_config = GoldConfiguration(HEAD)
+        pos_tokens = pos
+        yield pos_tokens
+        yield head
+        print(dep)
+        dep_token = [dep_label_dict.get(d) for d in dep]
+        print(dep_token)
+        yield dep_token
+        # gold_config = GoldConfiguration(HEAD)
         #yield gold_config
 
     sb.dataio.dataset.add_dynamic_item(datasets, syntax_pipeline)
 
-
     # 3. Set output:
     sb.dataio.dataset.set_output_keys(
-        datasets, ["words","tokens_list","tokens_bos", "tokens_eos", "tokens", "tokens_conllu", "POS", "HEAD", "DEP"],
+        datasets, ["words", "tokens_list", "tokens_bos", "tokens_eos", "tokens",
+                   "tokens_conllu", "pos_tokens", "head", "dep_tokens"],
     )
     return train_data, valid_data, test_data
 
+
+dep_label_dict = {'periph': 0, 'subj': 1, 'root': 2, 'dep': 3, 'dm': 4,
+                  'spe': 5, 'mark': 6, 'para': 7, 'aux': 8, 'disflink': 9, 'morph': 10, 'parenth': 11,
+                  'aff': 12, 'ROOT': 13, '__JOKER__': 14, 'INSERTION': 15, 'DELETION': 16}
+
+reverse_dep_label_dict = {v: k for k, v in dep_label_dict.items()}
 
 if __name__ == "__main__":
     # Load hyperparameters file with command-line overrides

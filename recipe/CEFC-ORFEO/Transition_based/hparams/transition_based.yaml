@@ -26,7 +26,7 @@ test_batch_size: 4 #4
 
 dataloader_options:
   batch_size: !ref <batch_size>
-  num_workers: 6
+  num_workers: 0
 test_dataloader_options:
   batch_size: !ref <test_batch_size>
   num_workers: 6
@@ -142,7 +142,11 @@ parser: !new:parsebrain.processing.dependency_parsing.transition_based.Transitio
 
 parse_cost: !new:torch.nn.NLLLoss
   ignore_index: -1
-  reduction: "mean"
+  reduction: "none"
+
+label_cost: !new:torch.nn.NLLLoss
+  ignore_index: -1
+  reduction: "none"
 
 model_opt_class: !name:torch.optim.Adadelta
   lr: !ref <lr>
