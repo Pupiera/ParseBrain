@@ -1,12 +1,13 @@
 import torch
 
-from parsebrain.processing.dependency_parsing.transition_based.configuration import Configuration
+from parsebrain.processing.dependency_parsing.transition_based.configuration import (
+    Configuration,
+)
 from .arc import Right_Arc, Left_Arc
 from .transition import Transition
 
 
 class ArcEagerTransition(Transition):
-
     def __init__(self):
         super().__init__()
         self.SHIFT = 0
@@ -14,19 +15,25 @@ class ArcEagerTransition(Transition):
         self.RIGHT = 2
         self.REDUCE = 3
 
-
     def get_transition_dict(self):
-        return {"SHIFT": self.SHIFT,
-                "REDUCE": self.REDUCE,
-                "LEFT": self.LEFT,
-                "RIGHT": self.RIGHT}
+        return {
+            "SHIFT": self.SHIFT,
+            "REDUCE": self.REDUCE,
+            "LEFT": self.LEFT,
+            "RIGHT": self.RIGHT,
+        }
+
+    def require_label(self, decision):
+        return decision == self.LEFT or decision == self.RIGHT
 
     def get_relation_from_decision(self, decision, config):
+
         try:
             stack = config.stack[0]
         except IndexError:
             device = config.buffer[0].device
-            stack = torch.zeros(config.buffer[0].size()).to(device) # toDo: putting this in config as it's own method. (remove torch in transition)
+            # toDo: putting this in config as it's own method. (remove torch in transition)
+            stack = torch.zeros(config.buffer[0].size()).to(device)
         try:
             buffer = config.buffer[0]
         except IndexError:
@@ -36,14 +43,29 @@ class ArcEagerTransition(Transition):
             return stack, buffer
         elif decision == self.LEFT:
             return buffer, stack
-        else: # if not valid, default = right
+        else:  # if not valid, default = right
             return stack, buffer
 
+    def update_tree(self, decision, config, tree):
+        """
+        Update a dictionary with for a given word, it's position and the position of the head.
+        For each word a dictionary is created and will be updated in another function to get the
+        label of syntactic relationship.
+        """
+        if decision == self.LEFT:
+            stack_head = config.stack_string[0]
+            buffer_head = config.buffer_string[0]
+            tree[buffer_head.position] = {"head": stack_head.position}
+        elif decision == self.RIGHT:
+            stack_head = config.stack_string[0]
+            buffer_head = config.buffer_string[0]
+            tree[stack_head.position] = {"head": buffer_head.position}
+
     def apply_decision(self, decision, config):
-        '''
+        """
         apply the given decision
         In case where the state is terminal do nothing (Padding)
-        '''
+        """
         if self.is_terminal(config):
             return config
 
@@ -56,7 +78,9 @@ class ArcEagerTransition(Transition):
         elif decision == self.RIGHT:
             return self.right_arc(config)
         else:
-            raise ValueError(f"Decision number ({decision}) is out of scope for arc-eager transition")
+            raise ValueError(
+                f"Decision number ({decision}) is out of scope for arc-eager transition"
+            )
 
     def is_decision_valid(self, decision, config):
         if self.is_terminal(config):
@@ -70,7 +94,9 @@ class ArcEagerTransition(Transition):
         elif decision == self.RIGHT:
             return self.right_arc_condition(config)
         else:
-            raise ValueError(f"Decision {decision} out of scope for arc-eager transition")
+            raise ValueError(
+                f"Decision {decision} out of scope for arc-eager transition"
+            )
 
     def is_terminal(self, config):
         """
@@ -228,4 +254,5 @@ class ArcEagerTransition(Transition):
 
 if __name__ == "__main__":
     import doctest
+
     doctest.testmod()

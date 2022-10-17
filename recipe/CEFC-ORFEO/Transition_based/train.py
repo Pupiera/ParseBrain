@@ -25,7 +25,7 @@ class Parser(sb.core.Brain):
         tokens = tokens.to(self.device)
         tokens_conllu = batch.tokens_conllu.data.to(self.device)
         features = self.extract_features(tokens, tokens_conllu)
-        words_list = []
+        # words_list = []
         config = []
         gold_config = []
         for wrds, feat, head, dep in zip(batch.words, features, batch.head, batch.dep_tokens):
@@ -118,17 +118,16 @@ class Parser(sb.core.Brain):
         for b_e, b_w_end in zip(emb, words_end_position):
             newEmb.append(b_e[b_w_end].to(self.device))
         return newEmb
-        #return pad_sequence(newEmb, batch_first=True)
-
+        # return pad_sequence(newEmb, batch_first=True)
 
     def extract_features(self, tokens, words_end_position):
         features = self.hparams.lm_model.get_embeddings(tokens)
         return self.get_last_subword_emb(features, words_end_position)
-    
+
     def create_words_list(self, words):
         words_list = []
         for i, w in enumerate(words):
-            words_list.append(Word(w, i+1))
+            words_list.append(Word(w, i + 1))
         return words_list
 
 
@@ -172,11 +171,11 @@ def dataio_prepare(hparams, tokenizer):
         yield tokens
         tokens_conllu = []
         for i, str in enumerate(words):
-            tokens_conllu.extend([i+1]*len(tokenizer.encode_as_ids(str)))
+            tokens_conllu.extend([i + 1] * len(tokenizer.encode_as_ids(str)))
         x = []
         y = 0
         for t_c in reversed(tokens_conllu):
-            if t_c != y :
+            if t_c != y:
                 x.append(True)
                 y = t_c
             else:
@@ -201,7 +200,7 @@ def dataio_prepare(hparams, tokenizer):
         print(dep_token)
         yield dep_token
         # gold_config = GoldConfiguration(HEAD)
-        #yield gold_config
+        # yield gold_config
 
     sb.dataio.dataset.add_dynamic_item(datasets, syntax_pipeline)
 
@@ -251,8 +250,8 @@ if __name__ == "__main__":
     )
 
     brain.fit(brain.hparams.epoch_counter,
-            train_data,
-            valid_data,
-            train_loader_kwargs=hparams['dataloader_options'],
-            valid_loader_kwargs=hparams['test_dataloader_options'],
-            )
+              train_data,
+              valid_data,
+              train_loader_kwargs=hparams['dataloader_options'],
+              valid_loader_kwargs=hparams['test_dataloader_options'],
+              )
