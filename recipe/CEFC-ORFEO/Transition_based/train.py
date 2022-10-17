@@ -1,7 +1,7 @@
-'''
+"""
 Recipe for transition based parsing on the CEFC-ORFEO dataset.
 authors : Adrien PUPIER
-'''
+"""
 import sys
 
 import speechbrain as sb
@@ -12,14 +12,18 @@ from speechbrain.utils.distributed import run_on_main
 
 import parsebrain as pb  # extension of speechbrain
 from parsebrain.dataio.pred_to_file.pred_to_conllu import write_token_dict_conllu
-from parsebrain.processing.dependency_parsing.eval.conll18_ud_eval import evaluate_wrapper
-from parsebrain.processing.dependency_parsing.transition_based.configuration \
-    import Configuration, GoldConfiguration, Word
+from parsebrain.processing.dependency_parsing.eval.conll18_ud_eval import (
+    evaluate_wrapper,
+)
+from parsebrain.processing.dependency_parsing.transition_based.configuration import (
+    Configuration,
+    GoldConfiguration,
+    Word,
+)
 
 
 # ToDo: num_workers back to 6 (0 for debugging)
 class Parser(sb.core.Brain):
-
     def compute_forward(self, batch, stage):
         tokens = batch.tokens.data
         tokens = tokens.to(self.device)
@@ -28,7 +32,9 @@ class Parser(sb.core.Brain):
         # words_list = []
         config = []
         gold_config = []
-        for wrds, feat, head, dep in zip(batch.words, features, batch.head, batch.dep_tokens):
+        for wrds, feat, head, dep in zip(
+            batch.words, features, batch.head, batch.dep_tokens
+        ):
             # words_list.append(self.create_words_list(wrds))
             config.append(Configuration(feat, self.create_words_list(wrds)))
             gold_config.append(GoldConfiguration(head, dep))
@@ -36,24 +42,47 @@ class Parser(sb.core.Brain):
             parsing_dict = self.hparams.parser.parse(config, stage, gold_config)
         else:
             parsing_dict = self.hparams.parser.parse(config, stage)
-        return parsing_dict["decision_score"], parsing_dict["decision_taken"], \
-               parsing_dict["oracle_parsing"], parsing_dict["label_score"], \
-               parsing_dict["oracle_label"], parsing_dict["mask_label"]
+        return (
+            parsing_dict["decision_score"],
+            parsing_dict["decision_taken"],
+            parsing_dict["oracle_parsing"],
+            parsing_dict["label_score"],
+            parsing_dict["oracle_label"],
+            parsing_dict["mask_label"],
+        )
 
     def compute_objectives(self, predictions, batch, stage):
         # compute loss : Need to compute predictions (list of gold transitions)
-        parse_log_prob, parse, dynamic_oracle_decision, \
-        label_log_prob, dynamic_oracle_label, mask_label_decision = predictions
+        (
+            parse_log_prob,
+            parse,
+            dynamic_oracle_decision,
+            label_log_prob,
+            dynamic_oracle_label,
+            mask_label_decision,
+        ) = predictions
 
-        mask_parse = parse != -1  # Padded decision for structure of tree is marked with -1
+        mask_parse = (
+                parse != -1
+        )  # Padded decision for structure of tree is marked with -1
         # We compute the loss for each value, and we only keep the case where the decision was valid. (not batch padding)
         # loss need log prob in form (Batch, class, seq)
-        loss = self.hparams.parse_cost(torch.transpose(parse_log_prob, 1, -1), dynamic_oracle_decision).masked_select(
-            mask_parse).mean()
+        loss = (
+            self.hparams.parse_cost(
+                torch.transpose(parse_log_prob, 1, -1), dynamic_oracle_decision
+            )
+            .masked_select(mask_parse)
+            .mean()
+        )
         # Compute the loss for each element based on decision and only keep relevant one.
         # Allow to compute label in a batch way.
-        loss += self.hparams.label_cost(torch.transpose(label_log_prob, 1, -1), dynamic_oracle_label).masked_select(
-            mask_label_decision).mean()
+        loss += (
+            self.hparams.label_cost(
+                torch.transpose(label_log_prob, 1, -1), dynamic_oracle_label
+            )
+            .masked_select(mask_label_decision)
+            .mean()
+        )
 
         if sb.Stage.VALID == stage:
             # what to do if tree is malformed ? dumb heursitics, attach to previous word ?
@@ -65,8 +94,12 @@ class Parser(sb.core.Brain):
     def on_stage_end(self, stage, stage_loss, epoch=None):
         stage_stats = {"loss": stage_loss}
         if stage == sb.Stage.VALID:  # metrics value
-            metrics = evaluate_wrapper({"system_file": self.hparams.file_valid,
-                                        "gold_file": self.hparams.valid_conllu})
+            metrics = evaluate_wrapper(
+                {
+                    "system_file": self.hparams.file_valid,
+                    "gold_file": self.hparams.valid_conllu,
+                }
+            )
             stage_stats["LAS"] = metrics["LAS"].f1 * 100
             stage_stats["UAS"] = metrics["UAS"].f1 * 100
 
@@ -74,7 +107,9 @@ class Parser(sb.core.Brain):
             wandb_stats = {"epoch": epoch}
             wandb_stats = {**wandb_stats, **stage_stats}
             wandb.log(wandb_stats)
-            self.checkpointer.save_and_keep_only(meta={"LAS": stage_stats["LAS"]}, max_keys=["LAS"])
+            self.checkpointer.save_and_keep_only(
+                meta={"LAS": stage_stats["LAS"]}, max_keys=["LAS"]
+            )
 
     def init_optimizers(self):
         "Initializes the model optimizer"
@@ -140,15 +175,18 @@ def dataio_prepare(hparams, tokenizer):
     data_folder = hparams["data_folder"]
 
     train_data = pb.dataio.dataset.DynamicItemDatasetConllu.from_conllu(
-        conllu_path=hparams["train_conllu"], keys=hparams['conllu_keys'],
+        conllu_path=hparams["train_conllu"],
+        keys=hparams["conllu_keys"],
     )
 
     valid_data = pb.dataio.dataset.DynamicItemDatasetConllu.from_conllu(
-        conllu_path=hparams["valid_conllu"], keys=hparams['conllu_keys'],
+        conllu_path=hparams["valid_conllu"],
+        keys=hparams["conllu_keys"],
     )
 
     test_data = pb.dataio.dataset.DynamicItemDatasetConllu.from_conllu(
-        conllu_path=hparams["test_conllu"], keys=hparams['conllu_keys'],
+        conllu_path=hparams["test_conllu"],
+        keys=hparams["conllu_keys"],
     )
 
     datasets = [train_data, valid_data, test_data]
@@ -189,9 +227,9 @@ def dataio_prepare(hparams, tokenizer):
     @sb.utils.data_pipeline.takes("POS", "HEAD", "DEP")
     @sb.utils.data_pipeline.provides("pos_tokens", "head", "dep_tokens")
     def syntax_pipeline(pos, head, dep):
-        '''
+        """
         compute gold configuration here
-        '''
+        """
         pos_tokens = pos
         yield pos_tokens
         yield head
@@ -206,15 +244,41 @@ def dataio_prepare(hparams, tokenizer):
 
     # 3. Set output:
     sb.dataio.dataset.set_output_keys(
-        datasets, ["words", "tokens_list", "tokens_bos", "tokens_eos", "tokens",
-                   "tokens_conllu", "pos_tokens", "head", "dep_tokens"],
-    )
+    datasets,
+    [
+        "words",
+        "tokens_list",
+        "tokens_bos",
+        "tokens_eos",
+        "tokens",
+        "tokens_conllu",
+        "pos_tokens",
+        "head",
+        "dep_tokens",
+    ],
+)
     return train_data, valid_data, test_data
 
 
-dep_label_dict = {'periph': 0, 'subj': 1, 'root': 2, 'dep': 3, 'dm': 4,
-                  'spe': 5, 'mark': 6, 'para': 7, 'aux': 8, 'disflink': 9, 'morph': 10, 'parenth': 11,
-                  'aff': 12, 'ROOT': 13, '__JOKER__': 14, 'INSERTION': 15, 'DELETION': 16}
+dep_label_dict = {
+    "periph": 0,
+    "subj": 1,
+    "root": 2,
+    "dep": 3,
+    "dm": 4,
+    "spe": 5,
+    "mark": 6,
+    "para": 7,
+    "aux": 8,
+    "disflink": 9,
+    "morph": 10,
+    "parenth": 11,
+    "aff": 12,
+    "ROOT": 13,
+    "__JOKER__": 14,
+    "INSERTION": 15,
+    "DELETION": 16,
+}
 
 reverse_dep_label_dict = {v: k for k, v in dep_label_dict.items()}
 
@@ -237,7 +301,7 @@ if __name__ == "__main__":
     run_on_main(hparams["pretrainer"].collect_files)
     hparams["pretrainer"].load_collected(device=run_opts["device"])
 
-    tokenizer = hparams['tokenizer']
+    tokenizer = hparams["tokenizer"]
 
     # Create the datasets objects as well as tokenization and encoding :-D
     train_data, valid_data, test_data = dataio_prepare(hparams, tokenizer)
@@ -249,9 +313,10 @@ if __name__ == "__main__":
         checkpointer=hparams["checkpointer"],
     )
 
-    brain.fit(brain.hparams.epoch_counter,
-              train_data,
-              valid_data,
-              train_loader_kwargs=hparams['dataloader_options'],
-              valid_loader_kwargs=hparams['test_dataloader_options'],
-              )
+    brain.fit(
+        brain.hparams.epoch_counter,
+        train_data,
+        valid_data,
+        train_loader_kwargs=hparams["dataloader_options"],
+        valid_loader_kwargs=hparams["test_dataloader_options"],
+    )
