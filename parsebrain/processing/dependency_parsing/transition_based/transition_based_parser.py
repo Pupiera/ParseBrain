@@ -119,7 +119,6 @@ class TransitionBasedParser:
         # toDo: maybe add with torch.no_grad()
         for i, d in enumerate(decision_taken):
     last_key = self.transition.update_tree(d, config[i], parsed_tree[i])
-
     if self.transition.require_label(d):
         # does not work cause ordered
         parsed_tree[i][last_key]["label"] = torch.argmax(label_score[i]).item()

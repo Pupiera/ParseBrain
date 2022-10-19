@@ -146,7 +146,7 @@ class Parser(sb.core.Brain):
             stage_stats["UAS"] = metrics["UAS"].f1 * 100
 
         if (
-                stage == sb.Stage.VALID
+            stage == sb.Stage.VALID
         ):  # Optimization of learning rate, logging, checkpointing
             wandb_stats = {"epoch": epoch}
             wandb_stats = {**wandb_stats, **stage_stats}
