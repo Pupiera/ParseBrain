@@ -86,7 +86,7 @@ class Parser(sb.core.Brain):
             .mean()
         )
         # Populate the list that will be written at the end of the stage.
-        if sb.Stage.VALID == stage or True:
+        if sb.Stage.VALID == stage:
             self._create_data_from_parsed_tree(parsed_tree, sent_ids, words, pos)
         return loss
 
@@ -293,20 +293,20 @@ def dataio_prepare(hparams, tokenizer):
 
     # 3. Set output:
     sb.dataio.dataset.set_output_keys(
-    datasets,
-    [
-        "sent_id",
-        "words",
-        "tokens_list",
-        "tokens_bos",
-        "tokens_eos",
-        "tokens",
-        "tokens_conllu",
-        "pos_tokens",
-        "head",
-        "dep_tokens",
-    ],
-)
+        datasets,
+        [
+            "sent_id",
+            "words",
+            "tokens_list",
+            "tokens_bos",
+            "tokens_eos",
+            "tokens",
+            "tokens_conllu",
+            "pos_tokens",
+            "head",
+            "dep_tokens",
+        ],
+    )
     return train_data, valid_data, test_data
 
 
