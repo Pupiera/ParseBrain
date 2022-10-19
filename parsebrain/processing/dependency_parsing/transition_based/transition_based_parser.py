@@ -122,7 +122,7 @@ class TransitionBasedParser:
             if self.transition.require_label(d):
                 # does not work cause ordered
                 parsed_tree[i][last_key]["label"] = torch.argmax(label_score[i]).item()
-                return parsed_tree
+        return parsed_tree
 
     def _get_oracle_move_from_config_tree(
         self, config, gold_config, dynamic_oracle_decision
