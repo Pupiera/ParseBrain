@@ -29,7 +29,6 @@ class Parser(sb.core.Brain):
         tokens = tokens.to(self.device)
         tokens_conllu = batch.tokens_conllu.data.to(self.device)
         features = self.extract_features(tokens, tokens_conllu)
-        # words_list = []
         config = []
         gold_config = []
         for wrds, feat, head, dep in zip(
@@ -49,6 +48,7 @@ class Parser(sb.core.Brain):
             parsing_dict["label_score"],
             parsing_dict["oracle_label"],
             parsing_dict["mask_label"],
+            parsing_dict["parsed_tree"],
         )
 
     def compute_objectives(self, predictions, batch, stage):
@@ -60,11 +60,13 @@ class Parser(sb.core.Brain):
             label_log_prob,
             dynamic_oracle_label,
             mask_label_decision,
+            parsed_tree,
         ) = predictions
-
-        mask_parse = (
-                parse != -1
-        )  # Padded decision for structure of tree is marked with -1
+        words = batch.words
+        pos = batch.pos_tokens
+        sent_ids = batch.sent_id
+        # Padded decision for structure of tree is marked with -1
+        mask_parse = parse != -1
         # We compute the loss for each value, and we only keep the case where the decision was valid. (not batch padding)
         # loss need log prob in form (Batch, class, seq)
         loss = (
@@ -83,17 +85,57 @@ class Parser(sb.core.Brain):
             .masked_select(mask_label_decision)
             .mean()
         )
-
-        if sb.Stage.VALID == stage:
-            # what to do if tree is malformed ? dumb heursitics, attach to previous word ?
-            data = self.create_dict_from_pred(parse_log_prob, label_log_prob)
-            file_Valid = self.hparams.file_valid
-            write_token_dict_conllu(data, file_Valid)
+        # Populate the list that will be written at the end of the stage.
+        if sb.Stage.VALID == stage or True:
+            self._create_data_from_parsed_tree(parsed_tree, sent_ids, words, pos)
         return loss
+
+    def _create_data_from_parsed_tree(self, parsed_tree, sent_ids, words, pos):
+        for p_t, sent, po, sent_id in zip(parsed_tree, words, pos, sent_ids):
+            self.data_valid.append({"sent_id": sent_id, "sentence": []})
+            root = None
+            for i in range(len(sent)):
+                if i + 1 in p_t.keys():
+                    self.data_valid[-1]["sentence"].append(
+                        {
+                            "ID": i + 1,
+                            "FORM": sent[i],
+                            "UPOS": po[i],
+                            "HEAD": p_t[i + 1]["head"],
+                            "DEPREL": reverse_dep_label_dict.get(
+                                p_t[i + 1]["label"], "UNDEFINED"
+                            ),
+                        }
+                    )
+                elif root is None:
+                    # If no head, this is the root
+                    self.data_valid[-1]["sentence"].append(
+                        {
+                            "ID": i + 1,
+                            "FORM": sent[i],
+                            "UPOS": po[i],
+                            "HEAD": 0,
+                            "DEPREL": "root",
+                        }
+                    )
+                    root = i + 1
+                else:
+                    self.data_valid[-1]["sentence"].append(
+                        {
+                            "ID": i + 1,
+                            "FORM": sent[i],
+                            "UPOS": po[i],
+                            "HEAD": root,
+                            "DEPREL": "DEFAULT_ROOT",
+                        }
+                    )
 
     def on_stage_end(self, stage, stage_loss, epoch=None):
         stage_stats = {"loss": stage_loss}
         if stage == sb.Stage.VALID:  # metrics value
+            with open(self.hparams.file_valid, "w", encoding="utf-8") as f_v:
+                write_token_dict_conllu(self.data_valid, f_v)
+            self.data_valid = []
             metrics = evaluate_wrapper(
                 {
                     "system_file": self.hparams.file_valid,
@@ -103,7 +145,9 @@ class Parser(sb.core.Brain):
             stage_stats["LAS"] = metrics["LAS"].f1 * 100
             stage_stats["UAS"] = metrics["UAS"].f1 * 100
 
-        if stage == sb.Stage.VALID:  # Optimization of learning rate, logging, checkpointing
+        if (
+                stage == sb.Stage.VALID
+        ):  # Optimization of learning rate, logging, checkpointing
             wandb_stats = {"epoch": epoch}
             wandb_stats = {**wandb_stats, **stage_stats}
             wandb.log(wandb_stats)
@@ -192,11 +236,18 @@ def dataio_prepare(hparams, tokenizer):
     datasets = [train_data, valid_data, test_data]
 
     # 2. Define text pipeline:
-    @sb.utils.data_pipeline.takes("words")
+    @sb.utils.data_pipeline.takes("sent_id", "words")
     @sb.utils.data_pipeline.provides(
-        "words", "tokens_list", "tokens_bos", "tokens_eos", "tokens", "tokens_conllu"
+        "sent_id",
+        "words",
+        "tokens_list",
+        "tokens_bos",
+        "tokens_eos",
+        "tokens",
+        "tokens_conllu",
     )
-    def text_pipeline(words):
+    def text_pipeline(sent_id, words):
+        yield sent_id
         wrd = " ".join(words)
         yield words
         tokens_list = tokenizer.encode_as_ids(wrd)
@@ -233,9 +284,7 @@ def dataio_prepare(hparams, tokenizer):
         pos_tokens = pos
         yield pos_tokens
         yield head
-        print(dep)
         dep_token = [dep_label_dict.get(d) for d in dep]
-        print(dep_token)
         yield dep_token
         # gold_config = GoldConfiguration(HEAD)
         # yield gold_config
@@ -246,6 +295,7 @@ def dataio_prepare(hparams, tokenizer):
     sb.dataio.dataset.set_output_keys(
     datasets,
     [
+        "sent_id",
         "words",
         "tokens_list",
         "tokens_bos",
@@ -312,7 +362,7 @@ if __name__ == "__main__":
         run_opts=run_opts,
         checkpointer=hparams["checkpointer"],
     )
-
+    brain.data_valid = []
     brain.fit(
         brain.hparams.epoch_counter,
         train_data,

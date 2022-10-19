@@ -118,10 +118,11 @@ class TransitionBasedParser:
     def _update_tree(self, decision_taken, label_score, config, parsed_tree):
         # toDo: maybe add with torch.no_grad()
         for i, d in enumerate(decision_taken):
-            self.transition.update_tree(d, config[i], parsed_tree[i])
-            if self.transition.require_label(d):
-                last_key = list(parsed_tree[i].keys())[-1]
-                parsed_tree[i][last_key]["label"] = torch.argmax(label_score[i]).item()
+    last_key = self.transition.update_tree(d, config[i], parsed_tree[i])
+
+    if self.transition.require_label(d):
+        # does not work cause ordered
+        parsed_tree[i][last_key]["label"] = torch.argmax(label_score[i]).item()
         return parsed_tree
 
     def _get_oracle_move_from_config_tree(

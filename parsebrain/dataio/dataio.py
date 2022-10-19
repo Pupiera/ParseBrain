@@ -1,5 +1,6 @@
-from parsebrain.dataio.conllu_tokens import ConlluDict
 import re
+
+from parsebrain.dataio.conllu_tokens import ConlluDict
 
 
 def load_data_conllu(conllu_path, keys, replacement={}):
@@ -41,14 +42,21 @@ def load_data_conllu(conllu_path, keys, replacement={}):
                 if line.startswith("# sent_id"):
                     sent_id = line.split()[-1]
                     current_sent = ConlluDict()
+                    current_sent.set_sent_id(sent_id)
                 continue
             if not line:  # end of sentence
-                result[sent_id] = current_sent
+                try:
+                    result[sent_id] = current_sent
+                except KeyError:
+                    raise KeyError(
+                        "conllu sentence has to have an 'sent_id' comment, with unique ids"
+                        " for all data points"
+                    )
                 current_sent = ConlluDict()
                 continue
-            fields = line.split('\t')
+            fields = line.split("\t")
             if len(fields) == 1:
-                fields = re.split(r'\s{2,}', line)
+                fields = re.split(r"\s{2,}", line)
             current_sent.extend_by_keys(keys, fields)
         if current_sent is not None:
             result[sent_id] = current_sent

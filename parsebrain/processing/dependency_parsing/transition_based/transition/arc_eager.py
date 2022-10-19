@@ -52,14 +52,18 @@ class ArcEagerTransition(Transition):
         For each word a dictionary is created and will be updated in another function to get the
         label of syntactic relationship.
         """
+        key = None
         if decision == self.LEFT:
             stack_head = config.stack_string[0]
             buffer_head = config.buffer_string[0]
-            tree[buffer_head.position] = {"head": stack_head.position}
+            key = buffer_head.position
+            tree[key] = {"head": stack_head.position}
         elif decision == self.RIGHT:
             stack_head = config.stack_string[0]
             buffer_head = config.buffer_string[0]
-            tree[stack_head.position] = {"head": buffer_head.position}
+            key = stack_head.position
+            tree[key] = {"head": buffer_head.position}
+        return key
 
     def apply_decision(self, decision, config):
         """
@@ -125,7 +129,9 @@ class ArcEagerTransition(Transition):
         Condition to fullfill for shift to be available
         :return:
         """
-        return len(config.buffer) != 0
+        return len(config.buffer) > 1 or (
+                len(config.buffer) == 1 and len(config.stack) == 0
+        )
 
     @staticmethod
     def shift(config):

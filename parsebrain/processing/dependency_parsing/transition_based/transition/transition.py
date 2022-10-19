@@ -3,7 +3,7 @@ class Transition:
         pass
 
     def get_relation_from_decision(self, decision, config):
-    raise NotImplementedError("Subclass need to implement this function")
+        raise NotImplementedError("Subclass need to implement this function")
 
     def is_decision_valid(self, decision, config):
         raise NotImplementedError("Subclass need to implement this function")
