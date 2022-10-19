@@ -11,13 +11,13 @@ from .transition import Transition
 
 class TransitionBasedParser:
     def __init__(
-            self,
-            neural_network,
-            label_neural_network,
-            transition: Transition,
-            features_computer,
-            dynamic_oracle,
-            label_policie,
+        self,
+        neural_network,
+        label_neural_network,
+        transition: Transition,
+        features_computer,
+        dynamic_oracle,
+        label_policie,
     ):
         self.parser_neural_network = neural_network
         self.label_neural_network = label_neural_network
@@ -118,14 +118,14 @@ class TransitionBasedParser:
     def _update_tree(self, decision_taken, label_score, config, parsed_tree):
         # toDo: maybe add with torch.no_grad()
         for i, d in enumerate(decision_taken):
-    last_key = self.transition.update_tree(d, config[i], parsed_tree[i])
-    if self.transition.require_label(d):
-        # does not work cause ordered
-        parsed_tree[i][last_key]["label"] = torch.argmax(label_score[i]).item()
-        return parsed_tree
+            last_key = self.transition.update_tree(d, config[i], parsed_tree[i])
+            if self.transition.require_label(d):
+                # does not work cause ordered
+                parsed_tree[i][last_key]["label"] = torch.argmax(label_score[i]).item()
+                return parsed_tree
 
     def _get_oracle_move_from_config_tree(
-            self, config, gold_config, dynamic_oracle_decision
+        self, config, gold_config, dynamic_oracle_decision
     ):
         for i in range(len(config)):
             decision = self.dynamic_oracle.get_oracle_move_from_config_tree(
@@ -135,7 +135,7 @@ class TransitionBasedParser:
         return dynamic_oracle_decision
 
     def _get_oracle_label_from_config_tree(
-            self, config, gold_config, decision, dynamic_oracle_label
+        self, config, gold_config, decision, dynamic_oracle_label
     ):
         for i, d, c, gc in enumerate(zip(decision, config, gold_config)):
             label = self.dynamic_oracle.compute_label(c, gc, d)

@@ -130,7 +130,7 @@ class ArcEagerTransition(Transition):
         :return:
         """
         return len(config.buffer) > 1 or (
-                len(config.buffer) == 1 and len(config.stack) == 0
+            len(config.buffer) == 1 and len(config.stack) == 0
         )
 
     @staticmethod
