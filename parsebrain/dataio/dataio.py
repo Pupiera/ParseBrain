@@ -58,8 +58,8 @@ def load_data_conllu(conllu_path, keys, replacement={}):
             if len(fields) == 1:
                 fields = re.split(r"\s{2,}", line)
             current_sent.extend_by_keys(keys, fields)
-        if current_sent is not None:
-            result[sent_id] = current_sent
+        if not current_sent.is_empty(keys):
+    result[sent_id] = current_sent
         return result
 
 

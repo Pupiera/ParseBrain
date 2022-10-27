@@ -7,4 +7,14 @@ class ConlluDict(dict):
                 self[k] = [v]
 
     def set_sent_id(self, sent_id):
-        self['sent_id'] = sent_id
+        self["sent_id"] = sent_id
+
+    def is_empty(self, keys):
+        """
+        Test the first key in the list of key.
+        If key not in the dict return True
+        """
+        try:
+            return len(self[keys[0]]) == 0
+        except KeyError:
+            return True
