@@ -1,11 +1,12 @@
-from dynamic_oracle import DynamicOracle
 from parsebrain.processing.dependency_parsing.transition_based.configuration import (
     GoldConfiguration,
     Word,
+    Configuration,
 )
 from parsebrain.processing.dependency_parsing.transition_based.transition import (
     ArcEagerTransition,
 )
+from .dynamic_oracle import DynamicOracle
 
 """
 Need to think how to cleanly deal 
@@ -19,7 +20,9 @@ Need to think how to cleanly deal
 
 
 class DynamicOracleArcEager(DynamicOracle):
-    def get_oracle_move_from_config_tree(self, configuration, gold_configuration):
+    def get_oracle_move_from_config_tree(
+        self, configuration: Configuration, gold_configuration: GoldConfiguration
+    ):
         """
         Compute the next oracle move from current configuration and the gold configuration
 
@@ -66,7 +69,9 @@ class DynamicOracleArcEager(DynamicOracle):
         min_cost = min(decision_cost)
         return decision_cost.index(min_cost)
 
-    def compute_shift_cost(self, configuration, gold_configuration):
+    def compute_shift_cost(
+            self, configuration: Configuration, gold_configuration: GoldConfiguration
+    ):
         """
         (SHIFT; c, Ggold): Pushing b onto the stack means that b will not be able to acquire any
         head or dependents in s|σ. The cost is therefore the number of arcs in Agold of the form
@@ -110,7 +115,9 @@ class DynamicOracleArcEager(DynamicOracle):
                 cost += 1
         return cost
 
-    def compute_reduce_cost(self, configuration, gold_configuration):
+    def compute_reduce_cost(
+            self, configuration: Configuration, gold_configuration: GoldConfiguration
+    ):
         """
         (REDUCE; c, Ggold): Popping s from the stack means that s will not be able to acquire
         any dependents in b|β. The cost is therefore the number of arcs in Agold of the form
@@ -159,7 +166,9 @@ class DynamicOracleArcEager(DynamicOracle):
                 cost += 1
         return cost
 
-    def compute_left_arc_cost(self, configuration, gold_configuration):
+    def compute_left_arc_cost(
+            self, configuration: Configuration, gold_configuration: GoldConfiguration
+    ):
         """
         (LEFT-ARCl ; c, Ggold): Adding the arc (b, l, s) and popping s from the stack means that s
         will not be able to acquire any head or dependents in β. The cost is therefore the number
@@ -218,7 +227,9 @@ class DynamicOracleArcEager(DynamicOracle):
                 cost += 1
         return cost
 
-    def compute_right_arc_cost(self, configuration, gold_configuration):
+    def compute_right_arc_cost(
+            self, configuration: Configuration, gold_configuration: GoldConfiguration
+    ):
         """
         RIGHT-ARCl ; c, Ggold): Adding the arc (s, l, b) and pushing b onto the stack means that
         b will not be able to acquire any head in σ or β, nor any dependents in σ. The cost is
@@ -272,15 +283,20 @@ class DynamicOracleArcEager(DynamicOracle):
             if gold_configuration.heads[b] == p or gold_configuration.heads[p] == b:
                 # exception for the last element of the stack (should be the head)
                 if (
-                    gold_configuration.heads[b] == p
-                    and s_e.position == configuration.stack_string[-1].position
+                        gold_configuration.heads[b] == p
+                        and s_e.position == configuration.stack_string[-1].position
                 ):
                     continue
                 cost += 1
 
         return cost
 
-    def compute_label(self, configuration, gold_configuration, decision):
+    def compute_label(
+            self,
+            configuration: Configuration,
+            gold_configuration: GoldConfiguration,
+            decision: int,
+    ):
         transition = ArcEagerTransition()
         # get info of first element of stack
         try:

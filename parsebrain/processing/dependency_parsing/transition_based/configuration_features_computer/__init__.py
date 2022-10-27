@@ -1,1 +1,1 @@
-from .configuration_features_computer import ConfigurationFeaturesComputerConcat
+from .configuration_features_computer import *

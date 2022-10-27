@@ -1,9 +1,10 @@
 import re
+from typing import List
 
 from parsebrain.dataio.conllu_tokens import ConlluDict
 
 
-def load_data_conllu(conllu_path, keys, replacement={}):
+def load_data_conllu(conllu_path: str, keys: List, replacement: dict = {}):
     """
     Load conllu and format string values
     file must be formated with # sent_id = XXX before the tokens
@@ -59,7 +60,7 @@ def load_data_conllu(conllu_path, keys, replacement={}):
                 fields = re.split(r"\s{2,}", line)
             current_sent.extend_by_keys(keys, fields)
         if not current_sent.is_empty(keys):
-    result[sent_id] = current_sent
+            result[sent_id] = current_sent
         return result
 
 
