@@ -36,11 +36,11 @@ class Parser(sb.core.Brain):
         config = []
         gold_config = []
         static = (
-                self.hparams.number_of_epochs_static <= self.hparams.epoch_counter.current
+            self.hparams.number_of_epochs_static <= self.hparams.epoch_counter.current
         )
         if stage != sb.Stage.TEST:
             for wrds, feat, head, dep in zip(
-                    batch.words, features, batch.head, batch.dep_tokens
+                batch.words, features, batch.head, batch.dep_tokens
             ):
                 # words_list.append(self.create_words_list(wrds))
                 config.append(Configuration(feat, self.create_words_list(wrds)))
@@ -53,7 +53,9 @@ class Parser(sb.core.Brain):
                 config.append(Configuration(feat, self.create_words_list(wrds)))
 
         if sb.Stage.TRAIN == stage:
-    parsing_dict = self.hparams.parser.parse(config, stage, gold_config, static=static)
+            parsing_dict = self.hparams.parser.parse(
+                config, stage, gold_config, static=static
+            )
         else:
             parsing_dict = self.hparams.parser.parse(config, stage, gold_config)
         return (

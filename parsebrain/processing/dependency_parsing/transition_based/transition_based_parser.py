@@ -90,9 +90,9 @@ class TransitionBasedParser:
                 list_decision_score[i].append(d_score)
 
             if (
-                    not static
-                    and gold_config is not None
-                    and self.dynamic_oracle is not None
+                not static
+                and gold_config is not None
+                and self.dynamic_oracle is not None
             ):
                 oracle_decision = self._get_oracle_move_from_config_tree(
                     config, gold_config, oracle_decision
@@ -104,8 +104,8 @@ class TransitionBasedParser:
                 if not static:
                     # exploration rate should be warmed up
                     if (
-                            torch.rand(1) >= self.exploration_rate
-                            and sb.Stage.TRAIN == stage
+                        torch.rand(1) >= self.exploration_rate
+                        and sb.Stage.TRAIN == stage
                     ):
                         decision_taken = self._get_best_valid_decision(
                             decision_score, config
@@ -220,9 +220,9 @@ class TransitionBasedParser:
         )
 
     def _get_static_supervision(
-    self, static: bool, gold_config: List[GoldConfiguration]
-) -> torch.Tensor:
-    return self.static_oracle.compute_sequence(gold_config)
+        self, static: bool, gold_config: List[GoldConfiguration]
+    ) -> torch.Tensor:
+        return self.static_oracle.compute_sequence(gold_config)
 
     def _apply_decision(
         self, decision: int, config: List[Configuration]
