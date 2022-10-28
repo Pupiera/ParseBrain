@@ -61,7 +61,8 @@ lm_model: !new:parsebrain.speechbrain_custom.lobes.models.transformer.transforme
 
 
 # Training parameters
-number_of_epochs: 1
+number_of_epochs: 2
+number_of_epochs_static: 1
 
 lr: 1.0
 ckpt_interval_minutes: 30 # save checkpoint every N minutes
@@ -89,16 +90,16 @@ neural_network: !new:speechbrain.nnet.containers.Sequential
   activation2: !new:torch.nn.LeakyReLU
   drop2: !new:torch.nn.Dropout
     p: 0.15
-    linear3: !name:speechbrain.nnet.linear.Linear
-      n_neurons: 1024
-      bias: True
-    bn3: !name:speechbrain.nnet.normalization.BatchNorm1d
-    activation3: !new:torch.nn.LeakyReLU
-    linear_head: !name:speechbrain.nnet.linear.Linear
-      n_neurons: !ref <number_transitions>
-      bias: True
-    log_softmax: !new:speechbrain.nnet.activations.Softmax
-      apply_log: False
+  linear3: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  bn3: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation3: !new:torch.nn.LeakyReLU
+  linear_head: !name:speechbrain.nnet.linear.Linear
+    n_neurons: !ref <number_transitions>
+    bias: True
+  log_softmax: !new:speechbrain.nnet.activations.Softmax
+    apply_log: False
 
 
 neural_network_label: !new:speechbrain.nnet.containers.Sequential
@@ -180,7 +181,7 @@ acc_dyna: !new:speechbrain.utils.Accuracy.AccuracyStats
   # CONLLU output file
   #
 
-file_valid: "Orfeo_Camembert_base_VALID"
+file_valid: "Orfeo_Camembert_base_VALID.debug"
 
 #
 # Checkpointer

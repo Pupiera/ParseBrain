@@ -3,11 +3,11 @@ from typing import List
 import speechbrain as sb
 import torch
 
-from configuration_features_computer import ConfigurationFeaturesComputer
-from dynamic_oracle.dynamic_oracle import DynamicOracle
-from label.label_policie import LabelPolicie
-from static_oracle.static_oracle import StaticOracle
 from .configuration import Configuration, GoldConfiguration
+from .configuration_features_computer import ConfigurationFeaturesComputer
+from .dynamic_oracle.dynamic_oracle import DynamicOracle
+from .label.label_policie import LabelPolicie
+from .static_oracle.static_oracle import StaticOracle
 from .transition import Transition
 
 
@@ -75,22 +75,21 @@ class TransitionBasedParser:
         parsed_tree = [{} for _ in range(len(config))]
 
         # we compute the supervision with static oracle
-        static_sequence = self._get_static_supervision(static, gold_config)
+        if sb.Stage.TRAIN == stage:
+            static_sequence = self._get_static_supervision(static, gold_config)
         while any([not self._is_terminal(conf) for conf in config]):
             # Batched decision score for UAS
             features = self._compute_features(config)
             # features = torch.stack(features)
-            decision_score = self._decision_score(
-                features
-            )  # shape = [batch, nb_decision]
+            decision_score = self._decision_score(features)  # shape = [batch, nb_decision]
             # append it to the correct sequence of decision
             for i, d_score in enumerate(decision_score):
                 list_decision_score[i].append(d_score)
 
             if (
-                not static
-                and gold_config is not None
-                and self.dynamic_oracle is not None
+                    not static
+                    and gold_config is not None
+                    and self.dynamic_oracle is not None
             ):
                 oracle_decision = self._get_oracle_move_from_config_tree(
                     config, gold_config, oracle_decision
@@ -98,16 +97,25 @@ class TransitionBasedParser:
 
             # batched find best decision
             # Will need to define rate of exploration with dynamic oracle
-            if not static:
-                if torch.rand(1) >= self.exploration_rate and sb.Stage.TRAIN == stage:
-                    decision_taken = self._get_best_valid_decision(
-                        decision_score, config
-                    )
+            if sb.Stage.TRAIN == stage:
+                if not static:
+                    # exploration rate should be warmed up
+                    if (
+                            torch.rand(1) >= self.exploration_rate
+                            and sb.Stage.TRAIN == stage
+                    ):
+                        decision_taken = self._get_best_valid_decision(
+                            decision_score, config
+                        )
+                    else:
+                        decision_taken = oracle_decision[:, -1]
                 else:
-                    decision_taken = oracle_decision[:, -1]
-            elif stage == sb.Stage.TRAIN:
-                # apply last decision taken by oracle... (train will have 100% acc but loss will still apply)
-                decision_taken = static_sequence[:, -1]
+                    # apply last decision taken by oracle... (train will have 100% acc but loss will still apply)
+                    decision_taken = static_sequence[:, -1]
+            else:
+                # if test or validation, full exploration.
+                decision_taken = self._get_best_valid_decision(decision_score, config)
+
             #######################
             # ToDo: find a way to do this kind of operation with matrice operation. (to remove loops)
             for i, d in enumerate(decision_taken):
@@ -208,10 +216,10 @@ class TransitionBasedParser:
         )
 
     def _get_static_supervision(
-        self, static: bool, gold_config: GoldConfiguration
+            self, static: bool, gold_config: List[GoldConfiguration]
     ) -> List[List[int]]:
         if static and not gold_config is None and not static_oracle is None:
-            pass
+            return self.static_oracle.compute_sequence(gold_config=gold_config)
 
     def _apply_decision(
         self, decision: int, config: List[Configuration]

@@ -35,10 +35,13 @@ class Parser(sb.core.Brain):
         features = self.extract_features(tokens, tokens_conllu)
         config = []
         gold_config = []
+        static = (
+                self.hparams.number_of_epochs_static <= self.hparams.epoch_counter.current
+        )
 
         if stage != sb.Stage.TEST:
             for wrds, feat, head, dep in zip(
-                batch.words, features, batch.head, batch.dep_tokens
+                    batch.words, features, batch.head, batch.dep_tokens
             ):
                 # words_list.append(self.create_words_list(wrds))
                 config.append(Configuration(feat, self.create_words_list(wrds)))
@@ -192,12 +195,11 @@ class Parser(sb.core.Brain):
 
             loss = self.compute_objectives(outputs, batch, sb.Stage.TRAIN)
             loss.backward()
-            plot_grad_flow(self.hparams.modules["parser"].named_parameters())
+            # plot_grad_flow(self.hparams.modules["parser"].named_parameters())
             if self.check_gradients(loss):
                 self.model_optimizer.step()
 
             self.model_optimizer.zero_grad()
-        exit()
         return loss.detach()
 
     def get_last_subword_emb(self, emb, words_end_position):

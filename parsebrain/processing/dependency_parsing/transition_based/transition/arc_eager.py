@@ -1,3 +1,5 @@
+from typing import List
+
 import torch
 
 from parsebrain.processing.dependency_parsing.transition_based.configuration import (
