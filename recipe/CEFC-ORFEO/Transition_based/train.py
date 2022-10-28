@@ -38,7 +38,6 @@ class Parser(sb.core.Brain):
         static = (
                 self.hparams.number_of_epochs_static <= self.hparams.epoch_counter.current
         )
-
         if stage != sb.Stage.TEST:
             for wrds, feat, head, dep in zip(
                     batch.words, features, batch.head, batch.dep_tokens
@@ -54,7 +53,7 @@ class Parser(sb.core.Brain):
                 config.append(Configuration(feat, self.create_words_list(wrds)))
 
         if sb.Stage.TRAIN == stage:
-            parsing_dict = self.hparams.parser.parse(config, stage, gold_config)
+    parsing_dict = self.hparams.parser.parse(config, stage, gold_config, static=static)
         else:
             parsing_dict = self.hparams.parser.parse(config, stage, gold_config)
         return (
@@ -72,9 +71,9 @@ class Parser(sb.core.Brain):
         (
             parse_log_prob,
             parse,
-            dynamic_oracle_decision,
+            oracle_decision,
             label_log_prob,
-            dynamic_oracle_label,
+            oracle_label,
             mask_label_decision,
             parsed_tree,
         ) = predictions
@@ -85,14 +84,14 @@ class Parser(sb.core.Brain):
         mask_parse = parse != -1
         # We compute the loss for each value, and we only keep the case where the decision was valid. (not batch padding) trhough ignore_index = -1
         # loss need log prob in form (Batch, class, seq)
-        self.hparams.acc_dyna.append(parse_log_prob, dynamic_oracle_decision)
+        self.hparams.acc_dyna.append(parse_log_prob, oracle_decision)
         parse_log_prob = parse_log_prob.transpose(1, -1)
-        loss = self.hparams.parse_cost(parse_log_prob, dynamic_oracle_decision)
+        loss = self.hparams.parse_cost(parse_log_prob, oracle_decision)
 
         # Compute the loss for each element based on decision and only keep relevant one.
         # Allow to compute label in a batch way.
         label_log_prob = label_log_prob.transpose(1, -1)
-        loss += self.hparams.label_cost(label_log_prob, dynamic_oracle_label)
+        loss += self.hparams.label_cost(label_log_prob, oracle_label)
         # Populate the list that will be written at the end of the stage.
         if sb.Stage.VALID == stage:
             self._create_data_from_parsed_tree(parsed_tree, sent_ids, words, pos)

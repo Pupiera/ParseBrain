@@ -43,11 +43,13 @@ class GoldConfiguration:
         self.deps = {}  # the list of dependent of a given word (can be empty)
         if gov is not None:
             for i, g in enumerate(gov):
+                g = int(g)
                 self.heads[i + 1] = g
             depss = []
             for i, _ in enumerate(gov):
                 tmp = []
                 for y, gg in enumerate(gov):
+                    gg = int(gg)
                     if i + 1 == gg:
                         tmp.append(y + 1)
                 depss.append(tmp)

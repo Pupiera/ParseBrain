@@ -37,7 +37,7 @@ class ArcEagerTransition(Transition):
     ) -> (torch.Tensor, torch.Tensor):
 
         try:
-            stack = config.stack[0]
+            stack = config.stack[-1]
         except IndexError:
             device = config.buffer[0].device
             # toDo: putting this in config as it's own method. (remove torch in transition)
@@ -62,12 +62,12 @@ class ArcEagerTransition(Transition):
         """
         key = None
         if decision == self.LEFT:
-            stack_head = config.stack_string[0]
+            stack_head = config.stack_string[-1]
             buffer_head = config.buffer_string[0]
             key = buffer_head.position
             tree[key] = {"head": stack_head.position}
         elif decision == self.RIGHT:
-            stack_head = config.stack_string[0]
+            stack_head = config.stack_string[-1]
             buffer_head = config.buffer_string[0]
             key = stack_head.position
             tree[key] = {"head": buffer_head.position}
@@ -219,7 +219,7 @@ class ArcEagerTransition(Transition):
         >>>
         """
 
-        wi = config.stack[0]
+        wi = config.stack[-1]
         wi_string = config.stack_string[0]
         wj = config.buffer[0]
         wj_string = config.buffer_string[0]

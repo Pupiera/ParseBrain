@@ -21,8 +21,8 @@ conllu_keys: [ 'lineNumber', 'words', 'lemmas','POS','UPOS','tags',
 # With data_parallel batch_size is split into N jobs
 # With DDP batch_size is multiplied by N jobs
 # Must be 6 per GPU to fit 16GB of VRAM
-batch_size: 16 #8
-test_batch_size: 8 #4
+batch_size: 8 #8
+test_batch_size: 4 #4
 
 dataloader_options:
   batch_size: !ref <batch_size>
@@ -132,7 +132,7 @@ features_computer: !new:parsebrain.processing.dependency_parsing.transition_base
   dim: !ref <embedding_dim>
 
 dynamic_oracle: !new:parsebrain.processing.dependency_parsing.transition_based.dynamic_oracle.DynamicOracleArcEager
-
+static_oracle: !new:parsebrain.processing.dependency_parsing.transition_based.static_oracle.StaticOracleArcEager
 
 label_parser: !new:parsebrain.processing.dependency_parsing.transition_based.label.LabelPolicieEmbedding
 
@@ -143,6 +143,8 @@ parser: !new:parsebrain.processing.dependency_parsing.transition_based.Transitio
   dynamic_oracle: !ref <dynamic_oracle>
   label_policie: !ref <label_parser>
   label_neural_network: !ref <neural_network_label>
+  static_oracle: !ref <static_oracle>
+  exploration_rate: 0.5
 
 parse_cost: !new:torch.nn.CrossEntropyLoss
   ignore_index: -1

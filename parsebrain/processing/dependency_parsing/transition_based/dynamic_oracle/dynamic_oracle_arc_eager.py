@@ -300,7 +300,7 @@ class DynamicOracleArcEager(DynamicOracle):
         transition = ArcEagerTransition()
         # get info of first element of stack
         try:
-            stack_pos = configuration.stack_string[0].position
+            stack_pos = configuration.stack_string[-1].position
         except IndexError:
             return -1
         # get info of first element of buffer

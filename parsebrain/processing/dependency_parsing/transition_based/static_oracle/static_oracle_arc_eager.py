@@ -1,5 +1,8 @@
 from typing import List
 
+import torch
+from torch.nn.utils.rnn import pad_sequence
+
 from parsebrain.processing.dependency_parsing.transition_based.configuration import (
     Configuration,
     Word,
@@ -8,6 +11,7 @@ from parsebrain.processing.dependency_parsing.transition_based.configuration imp
 from parsebrain.processing.dependency_parsing.transition_based.transition import (
     ArcEagerTransition,
 )
+from .static_oracle import StaticOracle
 
 """
 The function compute_sequence is very generic. Maybe for other static oracle, 
@@ -15,19 +19,20 @@ we can create subclass from it and only define best_decision
 """
 
 
-class StaticOracle_ArcEager:
-    def __init__(self):
+class StaticOracleArcEager(StaticOracle):
+    def __init__(self, padding_value: int = -1):
+        super().__init__(padding_value)
         self.transition = ArcEagerTransition()
 
     def compute_sequence(
         self, batch_gold_config: List[GoldConfiguration]
-    ) -> List[List[int]]:
+    ) -> torch.Tensor:
         """
         >>> from parsebrain.processing.dependency_parsing.transition_based.configuration import GoldConfiguration
         >>> head1 = [2, 0, 2, 3]
         >>> head2 = [0, 3, 1, 1]
         >>> g_c = [GoldConfiguration(head1), GoldConfiguration(head2)]
-        >>> s_oracle = StaticOracle_ArcEager()
+        >>> s_oracle = StaticOracleArcEager()
         >>> s_oracle.compute_sequence(g_c)
         [[0, 1, 0, 2, 2], [0, 0, 1, 2, 3, 2]]
         """
@@ -44,9 +49,11 @@ class StaticOracle_ArcEager:
             while not self.transition.is_terminal(current_config):
                 decision = self.best_decision(current_config, gc)
                 self.transition.apply_decision(decision, current_config)
-                s_seq.append(decision)
-            static_sequence.append(s_seq)
-        return static_sequence
+                s_seq.append(torch.tensor(decision))
+            static_sequence.append(torch.stack(s_seq))
+        return pad_sequence(
+            static_sequence, batch_first=True, padding_value=self.padding_value
+        )
 
     def best_decision(
         self, config: Configuration, gold_config: GoldConfiguration

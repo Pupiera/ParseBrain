@@ -75,13 +75,16 @@ class TransitionBasedParser:
         parsed_tree = [{} for _ in range(len(config))]
 
         # we compute the supervision with static oracle
-        if sb.Stage.TRAIN == stage:
-            static_sequence = self._get_static_supervision(static, gold_config)
+        step_seq = 0
+        if sb.Stage.TRAIN == stage and static and not gold_config is None:
+            oracle_decision = self._get_static_supervision(static, gold_config)
         while any([not self._is_terminal(conf) for conf in config]):
             # Batched decision score for UAS
             features = self._compute_features(config)
             # features = torch.stack(features)
-            decision_score = self._decision_score(features)  # shape = [batch, nb_decision]
+            decision_score = self._decision_score(
+                features
+            )  # shape = [batch, nb_decision]
             # append it to the correct sequence of decision
             for i, d_score in enumerate(decision_score):
                 list_decision_score[i].append(d_score)
@@ -108,10 +111,10 @@ class TransitionBasedParser:
                             decision_score, config
                         )
                     else:
-                        decision_taken = oracle_decision[:, -1]
+                        decision_taken = [x[-1] for x in oracle_decision]
                 else:
                     # apply last decision taken by oracle... (train will have 100% acc but loss will still apply)
-                    decision_taken = static_sequence[:, -1]
+                    decision_taken = [x[step_seq] for x in oracle_decision]
             else:
                 # if test or validation, full exploration.
                 decision_taken = self._get_best_valid_decision(decision_score, config)
@@ -143,6 +146,7 @@ class TransitionBasedParser:
                 decision_taken, label_score, config, parsed_tree
             )
             config = self._apply_decision(decision_taken, config)
+            step_seq += 1
 
         list_decision_score = [torch.stack(x) for x in list_decision_score]
         list_decision_taken = [torch.stack(x) for x in list_decision_taken]
@@ -216,10 +220,9 @@ class TransitionBasedParser:
         )
 
     def _get_static_supervision(
-            self, static: bool, gold_config: List[GoldConfiguration]
-    ) -> List[List[int]]:
-        if static and not gold_config is None and not static_oracle is None:
-            return self.static_oracle.compute_sequence(gold_config=gold_config)
+    self, static: bool, gold_config: List[GoldConfiguration]
+) -> torch.Tensor:
+    return self.static_oracle.compute_sequence(gold_config)
 
     def _apply_decision(
         self, decision: int, config: List[Configuration]
