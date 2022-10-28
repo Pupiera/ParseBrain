@@ -28,36 +28,35 @@ class GoldConfiguration:
     """
 
     def __init__(self, gov: List[int] = None, label: List[str] = None):
-
-    """
-    >>> gov = [2,0,2,3]
-    >>> lab = ['X','root','Y', 'Z']
-    >>> g_c = GoldConfiguration(gov, lab)
-    >>> g_c.heads
-    {1: 2, 2: 0, 3: 2, 4: 3}
-    >>> g_c.deps
-    {1: [], 2: [1, 3], 3: [4], 4: []}
-    >>> g_c.label
-    {1: 'X', 2: 'root', 3: 'Y', 4: 'Z'}
-    """
-    self.heads = {}  # the head of a given word
-    self.deps = {}  # the list of dependent of a given word (can be empty)
-    if gov is not None:
-        for i, g in enumerate(gov):
-            self.heads[i + 1] = g
-        depss = []
-        for i, _ in enumerate(gov):
-            tmp = []
-            for y, gg in enumerate(gov):
-                if i + 1 == gg:
-                    tmp.append(y + 1)
-            depss.append(tmp)
-        for i, d in enumerate(depss):
-            self.deps[i + 1] = d
-        if label is not None:
-            self.label = {}  # the label between words i and the head.
-            for i, l in enumerate(label):
-                self.label[i + 1] = l
+        """
+        >>> gov = [2,0,2,3]
+        >>> lab = ['X','root','Y', 'Z']
+        >>> g_c = GoldConfiguration(gov, lab)
+        >>> g_c.heads
+        {1: 2, 2: 0, 3: 2, 4: 3}
+        >>> g_c.deps
+        {1: [], 2: [1, 3], 3: [4], 4: []}
+        >>> g_c.label
+        {1: 'X', 2: 'root', 3: 'Y', 4: 'Z'}
+        """
+        self.heads = {}  # the head of a given word
+        self.deps = {}  # the list of dependent of a given word (can be empty)
+        if gov is not None:
+            for i, g in enumerate(gov):
+                self.heads[i + 1] = g
+            depss = []
+            for i, _ in enumerate(gov):
+                tmp = []
+                for y, gg in enumerate(gov):
+                    if i + 1 == gg:
+                        tmp.append(y + 1)
+                depss.append(tmp)
+            for i, d in enumerate(depss):
+                self.deps[i + 1] = d
+            if label is not None:
+                self.label = {}  # the label between words i and the head.
+                for i, l in enumerate(label):
+                    self.label[i + 1] = l
 
 
 class Word:
@@ -66,8 +65,8 @@ class Word:
     """
 
     def __init__(self, word: str, position: int):
-    self.word = word
-    self.position = position
+        self.word = word
+        self.position = position
 
     def __str__(self):
         return f" Word (word :{self.word}, position : {self.position})"

@@ -31,7 +31,7 @@ class ArcEagerTransition(Transition):
         return decision == self.LEFT or decision == self.RIGHT
 
     def get_relation_from_decision(
-            self, decision: int, config: Configuration
+        self, decision: int, config: Configuration
     ) -> (torch.Tensor, torch.Tensor):
 
         try:
@@ -53,16 +53,16 @@ class ArcEagerTransition(Transition):
             return stack, buffer
 
     def update_tree(self, decision: int, config: Configuration, tree: dict) -> int:
-    """
-    Update a dictionary with for a given word, it's position and the position of the head.
-    For each word a dictionary is created and will be updated in another function to get the
-    label of syntactic relationship.
-    """
-    key = None
-    if decision == self.LEFT:
-        stack_head = config.stack_string[0]
-        buffer_head = config.buffer_string[0]
-        key = buffer_head.position
+        """
+        Update a dictionary with for a given word, it's position and the position of the head.
+        For each word a dictionary is created and will be updated in another function to get the
+        label of syntactic relationship.
+        """
+        key = None
+        if decision == self.LEFT:
+            stack_head = config.stack_string[0]
+            buffer_head = config.buffer_string[0]
+            key = buffer_head.position
             tree[key] = {"head": stack_head.position}
         elif decision == self.RIGHT:
             stack_head = config.stack_string[0]
@@ -93,27 +93,27 @@ class ArcEagerTransition(Transition):
             )
 
     def is_decision_valid(self, decision: int, config: Configuration) -> bool:
-    if self.is_terminal(config):
-        return False
-    if decision == self.SHIFT:
-        return self.shift_condition(config)
-    elif decision == self.REDUCE:
-        return self.reduce_condition(config)
-    elif decision == self.LEFT:
-        return self.left_arc_condition(config)
-    elif decision == self.RIGHT:
-        return self.right_arc_condition(config)
+        if self.is_terminal(config):
+            return False
+        if decision == self.SHIFT:
+            return self.shift_condition(config)
+        elif decision == self.REDUCE:
+            return self.reduce_condition(config)
+        elif decision == self.LEFT:
+            return self.left_arc_condition(config)
+        elif decision == self.RIGHT:
+            return self.right_arc_condition(config)
         else:
             raise ValueError(
                 f"Decision {decision} out of scope for arc-eager transition"
             )
 
     def is_terminal(self, config: Configuration) -> bool:
-    """
-    Condition is terminal if buffer is empty
-    (can't create any new arc if everything is on the stack)
-    """
-    return len(config.buffer) == 0
+        """
+        Condition is terminal if buffer is empty
+        (can't create any new arc if everything is on the stack)
+        """
+        return len(config.buffer) == 0
 
     @staticmethod
     def has_head(wi: Word, arc: List[Arc]) -> bool:
@@ -136,7 +136,7 @@ class ArcEagerTransition(Transition):
         :return:
         """
         return len(config.buffer) > 1 or (
-                len(config.buffer) == 1 and len(config.stack) == 0
+            len(config.buffer) == 1 and len(config.stack) == 0
         )
 
     @staticmethod

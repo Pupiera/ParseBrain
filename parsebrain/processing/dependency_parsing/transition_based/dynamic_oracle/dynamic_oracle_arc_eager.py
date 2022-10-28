@@ -70,7 +70,7 @@ class DynamicOracleArcEager(DynamicOracle):
         return decision_cost.index(min_cost)
 
     def compute_shift_cost(
-            self, configuration: Configuration, gold_configuration: GoldConfiguration
+        self, configuration: Configuration, gold_configuration: GoldConfiguration
     ):
         """
         (SHIFT; c, Ggold): Pushing b onto the stack means that b will not be able to acquire any
@@ -116,7 +116,7 @@ class DynamicOracleArcEager(DynamicOracle):
         return cost
 
     def compute_reduce_cost(
-            self, configuration: Configuration, gold_configuration: GoldConfiguration
+        self, configuration: Configuration, gold_configuration: GoldConfiguration
     ):
         """
         (REDUCE; c, Ggold): Popping s from the stack means that s will not be able to acquire
@@ -167,7 +167,7 @@ class DynamicOracleArcEager(DynamicOracle):
         return cost
 
     def compute_left_arc_cost(
-            self, configuration: Configuration, gold_configuration: GoldConfiguration
+        self, configuration: Configuration, gold_configuration: GoldConfiguration
     ):
         """
         (LEFT-ARCl ; c, Ggold): Adding the arc (b, l, s) and popping s from the stack means that s
@@ -228,7 +228,7 @@ class DynamicOracleArcEager(DynamicOracle):
         return cost
 
     def compute_right_arc_cost(
-            self, configuration: Configuration, gold_configuration: GoldConfiguration
+        self, configuration: Configuration, gold_configuration: GoldConfiguration
     ):
         """
         RIGHT-ARCl ; c, Ggold): Adding the arc (s, l, b) and pushing b onto the stack means that
@@ -283,8 +283,8 @@ class DynamicOracleArcEager(DynamicOracle):
             if gold_configuration.heads[b] == p or gold_configuration.heads[p] == b:
                 # exception for the last element of the stack (should be the head)
                 if (
-                        gold_configuration.heads[b] == p
-                        and s_e.position == configuration.stack_string[-1].position
+                    gold_configuration.heads[b] == p
+                    and s_e.position == configuration.stack_string[-1].position
                 ):
                     continue
                 cost += 1
@@ -292,10 +292,10 @@ class DynamicOracleArcEager(DynamicOracle):
         return cost
 
     def compute_label(
-            self,
-            configuration: Configuration,
-            gold_configuration: GoldConfiguration,
-            decision: int,
+        self,
+        configuration: Configuration,
+        gold_configuration: GoldConfiguration,
+        decision: int,
     ):
         transition = ArcEagerTransition()
         # get info of first element of stack

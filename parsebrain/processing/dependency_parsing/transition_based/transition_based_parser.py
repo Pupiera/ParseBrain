@@ -157,11 +157,11 @@ class TransitionBasedParser:
         return self.parser_neural_network(x)[:, -1, :]
 
     def _update_tree(
-            self,
-            decision_taken: List[int],
-            label_score: torch.Tensor,
-            config: Configuration,
-            parsed_tree: List[dict],
+        self,
+        decision_taken: List[int],
+        label_score: torch.Tensor,
+        config: Configuration,
+        parsed_tree: List[dict],
     ) -> List[dict]:
         # toDo: maybe add with torch.no_grad()
         for i, d in enumerate(decision_taken):
@@ -172,10 +172,10 @@ class TransitionBasedParser:
         return parsed_tree
 
     def _get_oracle_move_from_config_tree(
-            self,
-            config: Configuration,
-            gold_config: GoldConfiguration,
-            dynamic_oracle_decision: List[List[int]],
+        self,
+        config: Configuration,
+        gold_config: GoldConfiguration,
+        dynamic_oracle_decision: List[List[int]],
     ) -> List[List[int]]:
         for i in range(len(config)):
             decision = self.dynamic_oracle.get_oracle_move_from_config_tree(
@@ -185,16 +185,16 @@ class TransitionBasedParser:
         return dynamic_oracle_decision
 
     def _get_oracle_label_from_config_tree(
-    self,
-    config: Configuration,
-    gold_config: GoldConfiguration,
-    decision: int,
-    dynamic_oracle_label: List[List[int]],
-) -> List[List[int]]:
-    for i, d, c, gc in enumerate(zip(decision, config, gold_config)):
-        label = self.dynamic_oracle.compute_label(c, gc, d)
-        dynamic_oracle_label[i].append(label)
-    return dynamic_oracle_label
+        self,
+        config: Configuration,
+        gold_config: GoldConfiguration,
+        decision: int,
+        dynamic_oracle_label: List[List[int]],
+    ) -> List[List[int]]:
+        for i, d, c, gc in enumerate(zip(decision, config, gold_config)):
+            label = self.dynamic_oracle.compute_label(c, gc, d)
+            dynamic_oracle_label[i].append(label)
+        return dynamic_oracle_label
 
     def _compute_features(self, config: Configuration) -> torch.Tensor:
         """
@@ -208,13 +208,13 @@ class TransitionBasedParser:
         )
 
     def _get_static_supervision(
-            self, static: bool, gold_config: GoldConfiguration
+        self, static: bool, gold_config: GoldConfiguration
     ) -> List[List[int]]:
         if static and not gold_config is None and not static_oracle is None:
             pass
 
     def _apply_decision(
-            self, decision: int, config: List[Configuration]
+        self, decision: int, config: List[Configuration]
     ) -> List[Configuration]:
         """
         Function
@@ -228,7 +228,7 @@ class TransitionBasedParser:
         return config
 
     def _get_best_valid_decision(
-            self, decision_score: torch.Tensor, config: List[Configuration]
+        self, decision_score: torch.Tensor, config: List[Configuration]
     ) -> List[int]:
         # Batched config
         _, best_decision = torch.sort(decision_score, descending=True)
@@ -251,7 +251,7 @@ class TransitionBasedParser:
         return self.transition.is_terminal(config)
 
     def _compute_label(
-            self, config: List[Configuration], decision: List[int]
+        self, config: List[Configuration], decision: List[int]
     ) -> (torch.Tensor, torch.Tensor):
         """
         This function compute the label for each element of the batch.

@@ -63,8 +63,8 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         emb_buffer = torch.zeros((batch_size, self.dim))
         for i, x in enumerate(stack):
             try:
-                tmp_stack = torch.stack(x[-self.stack_depth:])
-                emb_stack[i, 0: tmp_stack.shape[0], :] = tmp_stack
+                tmp_stack = torch.stack(x[-self.stack_depth :])
+                emb_stack[i, 0 : tmp_stack.shape[0], :] = tmp_stack
             except RuntimeError:
                 # happen if the stack is empty, nothing to add
                 pass

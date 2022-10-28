@@ -28,7 +28,7 @@ class LabelPolicieEmbedding(LabelPolicie):
     """
 
     def compute_representation(
-            self, config: Configuration, decision: int, transition: Transition
+        self, config: Configuration, decision: int, transition: Transition
     ) -> torch.Tensor:
         head, dependent = transition.get_relation_from_decision(decision, config)
         rep = torch.cat((head, dependent))
