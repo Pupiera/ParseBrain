@@ -3,14 +3,16 @@ Recipe for transition based parsing on the CEFC-ORFEO dataset.
 authors : Adrien PUPIER
 """
 import sys
+import types
 
 import speechbrain as sb
 import torch
-import wandb
 from hyperpyyaml import load_hyperpyyaml
 from speechbrain.utils.distributed import run_on_main
 
 import parsebrain as pb  # extension of speechbrain
+import wandb
+from debug_utils import plot_grad_flow
 from parsebrain.dataio.pred_to_file.pred_to_conllu import write_token_dict_conllu
 from parsebrain.processing.dependency_parsing.eval.conll18_ud_eval import (
     evaluate_wrapper,
@@ -23,6 +25,8 @@ from parsebrain.processing.dependency_parsing.transition_based.configuration imp
 
 
 # ToDo: num_workers back to 6 (0 for debugging)
+# @export
+# @profile_optimiser
 class Parser(sb.core.Brain):
     def compute_forward(self, batch, stage):
         tokens = batch.tokens.data
@@ -31,16 +35,25 @@ class Parser(sb.core.Brain):
         features = self.extract_features(tokens, tokens_conllu)
         config = []
         gold_config = []
-        for wrds, feat, head, dep in zip(
-            batch.words, features, batch.head, batch.dep_tokens
-        ):
-            # words_list.append(self.create_words_list(wrds))
-            config.append(Configuration(feat, self.create_words_list(wrds)))
-            gold_config.append(GoldConfiguration(head, dep))
+
+        if stage != sb.Stage.TEST:
+            for wrds, feat, head, dep in zip(
+                batch.words, features, batch.head, batch.dep_tokens
+            ):
+                # words_list.append(self.create_words_list(wrds))
+                config.append(Configuration(feat, self.create_words_list(wrds)))
+                gold_config.append(GoldConfiguration(head, dep))
+        else:
+            for wrds, feat, head, dep in zip(
+                batch.words, features, batch.head, batch.dep_tokens
+            ):
+                # words_list.append(self.create_words_list(wrds))
+                config.append(Configuration(feat, self.create_words_list(wrds)))
+
         if sb.Stage.TRAIN == stage:
             parsing_dict = self.hparams.parser.parse(config, stage, gold_config)
         else:
-            parsing_dict = self.hparams.parser.parse(config, stage)
+            parsing_dict = self.hparams.parser.parse(config, stage, gold_config)
         return (
             parsing_dict["decision_score"],
             parsing_dict["decision_taken"],
@@ -67,24 +80,16 @@ class Parser(sb.core.Brain):
         sent_ids = batch.sent_id
         # Padded decision for structure of tree is marked with -1
         mask_parse = parse != -1
-        # We compute the loss for each value, and we only keep the case where the decision was valid. (not batch padding)
+        # We compute the loss for each value, and we only keep the case where the decision was valid. (not batch padding) trhough ignore_index = -1
         # loss need log prob in form (Batch, class, seq)
-        loss = (
-            self.hparams.parse_cost(
-                torch.transpose(parse_log_prob, 1, -1), dynamic_oracle_decision
-            )
-            .masked_select(mask_parse)
-            .mean()
-        )
+        self.hparams.acc_dyna.append(parse_log_prob, dynamic_oracle_decision)
+        parse_log_prob = parse_log_prob.transpose(1, -1)
+        loss = self.hparams.parse_cost(parse_log_prob, dynamic_oracle_decision)
+
         # Compute the loss for each element based on decision and only keep relevant one.
         # Allow to compute label in a batch way.
-        loss += (
-            self.hparams.label_cost(
-                torch.transpose(label_log_prob, 1, -1), dynamic_oracle_label
-            )
-            .masked_select(mask_label_decision)
-            .mean()
-        )
+        label_log_prob = label_log_prob.transpose(1, -1)
+        loss += self.hparams.label_cost(label_log_prob, dynamic_oracle_label)
         # Populate the list that will be written at the end of the stage.
         if sb.Stage.VALID == stage:
             self._create_data_from_parsed_tree(parsed_tree, sent_ids, words, pos)
@@ -132,19 +137,20 @@ class Parser(sb.core.Brain):
 
     def on_stage_end(self, stage, stage_loss, epoch=None):
         stage_stats = {"loss": stage_loss}
+        print(
+            f"loss: {stage_loss}, acc_to_oracle : {self.hparams.acc_dyna.summarize()}"
+        )
         if stage == sb.Stage.VALID:  # metrics value
             with open(self.hparams.file_valid, "w", encoding="utf-8") as f_v:
                 write_token_dict_conllu(self.data_valid, f_v)
             self.data_valid = []
-            metrics = evaluate_wrapper(
-                {
-                    "system_file": self.hparams.file_valid,
-                    "gold_file": self.hparams.valid_conllu,
-                }
-            )
+            d = types.SimpleNamespace()
+            d.system_file = self.hparams.file_valid
+            d.gold_file = self.hparams.valid_conllu
+            metrics = evaluate_wrapper(d)
             stage_stats["LAS"] = metrics["LAS"].f1 * 100
             stage_stats["UAS"] = metrics["UAS"].f1 * 100
-
+            print(f"UAS : {stage_stats['UAS']} LAS : {stage_stats['LAS']}")
         if (
             stage == sb.Stage.VALID
         ):  # Optimization of learning rate, logging, checkpointing
@@ -166,7 +172,7 @@ class Parser(sb.core.Brain):
     def fit_batch(self, batch):
         """Train the parameters given a single batch in input"""
         if self.auto_mix_prec:
-
+            print("MIXED PREC")
             self.model_optimizer.zero_grad()
 
             with torch.cuda.amp.autocast():
@@ -174,6 +180,7 @@ class Parser(sb.core.Brain):
                 loss = self.compute_objectives(outputs, batch, sb.Stage.TRAIN)
 
             self.scaler.scale(loss).backward()
+            plot_grad_flow(self.hparams.modules["parser"].named_parameters())
             self.scaler.unscale_(self.model_optimizer)
 
             if self.check_gradients(loss):
@@ -185,11 +192,12 @@ class Parser(sb.core.Brain):
 
             loss = self.compute_objectives(outputs, batch, sb.Stage.TRAIN)
             loss.backward()
+            plot_grad_flow(self.hparams.modules["parser"].named_parameters())
             if self.check_gradients(loss):
                 self.model_optimizer.step()
 
             self.model_optimizer.zero_grad()
-
+        exit()
         return loss.detach()
 
     def get_last_subword_emb(self, emb, words_end_position):
@@ -332,7 +340,9 @@ dep_label_dict = {
 
 reverse_dep_label_dict = {v: k for k, v in dep_label_dict.items()}
 
-if __name__ == "__main__":
+
+def main():
+    wandb.init()
     # Load hyperparameters file with command-line overrides
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
     with open(hparams_file) as fin:
@@ -370,3 +380,15 @@ if __name__ == "__main__":
         train_loader_kwargs=hparams["dataloader_options"],
         valid_loader_kwargs=hparams["test_dataloader_options"],
     )
+    # print(brain.profiler.key_averages().table(sort_by="self_cpu_time_total"))
+
+
+if __name__ == "__main__":
+    import cProfile, pstats
+
+    profiler = cProfile.Profile()
+    profiler.enable()
+    main()
+    profiler.disable()
+    stats = pstats.Stats(profiler).sort_stats("cumtime")
+    stats.print_stats()
