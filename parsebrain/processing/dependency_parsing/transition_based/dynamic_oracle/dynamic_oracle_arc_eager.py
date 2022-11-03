@@ -22,7 +22,7 @@ Need to think how to cleanly deal
 class DynamicOracleArcEager(DynamicOracle):
     def get_oracle_move_from_config_tree(
         self, configuration: Configuration, gold_configuration: GoldConfiguration
-    ):
+    ) -> int:
         """
         Compute the next oracle move from current configuration and the gold configuration
 
@@ -71,7 +71,7 @@ class DynamicOracleArcEager(DynamicOracle):
 
     def compute_shift_cost(
         self, configuration: Configuration, gold_configuration: GoldConfiguration
-    ):
+    ) -> int:
         """
         (SHIFT; c, Ggold): Pushing b onto the stack means that b will not be able to acquire any
         head or dependents in s|σ. The cost is therefore the number of arcs in Agold of the form
@@ -117,7 +117,7 @@ class DynamicOracleArcEager(DynamicOracle):
 
     def compute_reduce_cost(
         self, configuration: Configuration, gold_configuration: GoldConfiguration
-    ):
+    ) -> int:
         """
         (REDUCE; c, Ggold): Popping s from the stack means that s will not be able to acquire
         any dependents in b|β. The cost is therefore the number of arcs in Agold of the form
@@ -168,7 +168,7 @@ class DynamicOracleArcEager(DynamicOracle):
 
     def compute_left_arc_cost(
         self, configuration: Configuration, gold_configuration: GoldConfiguration
-    ):
+    ) -> int:
         """
         (LEFT-ARCl ; c, Ggold): Adding the arc (b, l, s) and popping s from the stack means that s
         will not be able to acquire any head or dependents in β. The cost is therefore the number
@@ -229,7 +229,7 @@ class DynamicOracleArcEager(DynamicOracle):
 
     def compute_right_arc_cost(
         self, configuration: Configuration, gold_configuration: GoldConfiguration
-    ):
+    ) -> int:
         """
         RIGHT-ARCl ; c, Ggold): Adding the arc (s, l, b) and pushing b onto the stack means that
         b will not be able to acquire any head in σ or β, nor any dependents in σ. The cost is

@@ -59,8 +59,8 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         # ToDo: replace torch.zeros with something allowing us to control padding value.
         # ToDo: Allow different buffer window
         batch_size = len(stack)
-        emb_stack = torch.zeros((batch_size, self.stack_depth, self.dim))
-        emb_buffer = torch.zeros((batch_size, self.dim))
+        emb_stack = torch.zeros((batch_size, self.stack_depth, self.dim)).to(device)
+        emb_buffer = torch.zeros((batch_size, self.dim)).to(device)
         for i, x in enumerate(stack):
             try:
                 tmp_stack = torch.stack(x[-self.stack_depth :])
@@ -69,15 +69,20 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
                 # happen if the stack is empty, nothing to add
                 pass
         for i, x in enumerate(buffer):
+            x = x[0:1]
             try:
                 tmp_buffer = torch.stack(x)
                 emb_buffer[i, :] = tmp_buffer
             except RuntimeError:
                 # happen if the buffer is empty
                 pass
-        return torch.cat(
-            (emb_buffer, emb_stack.reshape(batch_size, -1).to(device)), dim=1
-        )
+            except TypeError:
+                try:
+                    emb_buffer[i, :] = x
+                except RuntimeError:
+                    pass
+                    # do nothing
+        return torch.cat((emb_buffer, emb_stack.reshape(batch_size, -1)), dim=1)
 
         """
         tmp_stack = []
@@ -145,6 +150,7 @@ class ConfigurationFeaturesComputerConcatRNN(ConfigurationFeaturesComputerConcat
                 tmp_buffer.append(x[0])
             except IndexError:
                 tmp_buffer.append(torch.zeros(self.dim).to(device))
+
         emb_buffer = torch.stack(tmp_buffer).unsqueeze(1).to(device)
         result = torch.cat((emb_buffer, emb_stack), dim=1)
         return result

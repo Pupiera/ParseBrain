@@ -14,17 +14,16 @@ import parsebrain as pb  # extension of speechbrain
 import wandb
 from debug_utils import plot_grad_flow
 from parsebrain.dataio.pred_to_file.pred_to_conllu import write_token_dict_conllu
-from parsebrain.processing.dependency_parsing.eval.conll18_ud_eval import (
-    evaluate_wrapper,
-)
+
 from parsebrain.processing.dependency_parsing.transition_based.configuration import (
     Configuration,
     GoldConfiguration,
     Word,
 )
 
+from transformers import CamembertModel, CamembertTokenizerFast
 
-# ToDo: num_workers back to 6 (0 for debugging)
+
 # @export
 # @profile_optimiser
 class Parser(sb.core.Brain):
@@ -33,10 +32,11 @@ class Parser(sb.core.Brain):
         tokens = tokens.to(self.device)
         tokens_conllu = batch.tokens_conllu.data.to(self.device)
         features = self.extract_features(tokens, tokens_conllu)
+        seq_len = torch.tensor([len(w) for w in batch.words]).to(self.device)
         config = []
         gold_config = []
         static = (
-            self.hparams.number_of_epochs_static <= self.hparams.epoch_counter.current
+            self.hparams.number_of_epochs_static >= self.hparams.epoch_counter.current
         )
         if stage != sb.Stage.TEST:
             for wrds, feat, head, dep in zip(
@@ -56,47 +56,48 @@ class Parser(sb.core.Brain):
             parsing_dict = self.hparams.parser.parse(
                 config, stage, gold_config, static=static
             )
+            pos_log_prob = self.hparams.neural_network_POS(features)
         else:
             parsing_dict = self.hparams.parser.parse(config, stage, gold_config)
-        return (
-            parsing_dict["decision_score"],
-            parsing_dict["decision_taken"],
-            parsing_dict["oracle_parsing"],
-            parsing_dict["label_score"],
-            parsing_dict["oracle_label"],
-            parsing_dict["mask_label"],
-            parsing_dict["parsed_tree"],
-        )
+            pos_log_prob = self.hparams.neural_network_POS(features)
+        return parsing_dict, seq_len, pos_log_prob
 
     def compute_objectives(self, predictions, batch, stage):
         # compute loss : Need to compute predictions (list of gold transitions)
-        (
-            parse_log_prob,
-            parse,
-            oracle_decision,
-            label_log_prob,
-            oracle_label,
-            mask_label_decision,
-            parsed_tree,
-        ) = predictions
+        parsing_dict, seq_len, pos_log_prob = predictions
         words = batch.words
-        pos = batch.pos_tokens
+        pos = batch.pos_tokens.data.to(self.device)
         sent_ids = batch.sent_id
-        # Padded decision for structure of tree is marked with -1
-        mask_parse = parse != -1
-        # We compute the loss for each value, and we only keep the case where the decision was valid. (not batch padding) trhough ignore_index = -1
-        # loss need log prob in form (Batch, class, seq)
-        self.hparams.acc_dyna.append(parse_log_prob, oracle_decision)
-        parse_log_prob = parse_log_prob.transpose(1, -1)
-        loss = self.hparams.parse_cost(parse_log_prob, oracle_decision)
 
+        loss = self.hparams.pos_cost(pos_log_prob, pos, length=seq_len)
+
+        self.hparams.acc_dyna.append(
+            parsing_dict["parse_log_prob"],
+            parsing_dict["oracle_parsing"],
+            parsing_dict["oracle_parse_len"],
+        )
+        # parse_log_prob = parse_log_prob.transpose(1, -1)
+        loss += self.hparams.parse_cost(
+            parsing_dict["parse_log_prob"],
+            parsing_dict["oracle_parsing"],
+            parsing_dict["oracle_parse_len"],
+        )
         # Compute the loss for each element based on decision and only keep relevant one.
         # Allow to compute label in a batch way.
-        label_log_prob = label_log_prob.transpose(1, -1)
-        loss += self.hparams.label_cost(label_log_prob, oracle_label)
+        loss += self.hparams.label_cost(
+            parsing_dict["label_log_prob"],
+            parsing_dict["oracle_label"],
+            parsing_dict["oracle_label_len"],
+        )
         # Populate the list that will be written at the end of the stage.
         if sb.Stage.VALID == stage:
-            self._create_data_from_parsed_tree(parsed_tree, sent_ids, words, pos)
+            predicted_pos = [
+                [reverse_pos_dict.get(p.item()) for p in poss]
+                for poss in torch.argmax(pos_log_prob, dim=-1)
+            ]
+            self._create_data_from_parsed_tree(
+                parsing_dict["parsed_tree"], sent_ids, words, predicted_pos
+            )
         return loss
 
     def _create_data_from_parsed_tree(self, parsed_tree, sent_ids, words, pos):
@@ -151,19 +152,22 @@ class Parser(sb.core.Brain):
             d = types.SimpleNamespace()
             d.system_file = self.hparams.file_valid
             d.gold_file = self.hparams.valid_conllu
-            metrics = evaluate_wrapper(d)
+            metrics = self.hparams.eval_conll(d)
             stage_stats["LAS"] = metrics["LAS"].f1 * 100
             stage_stats["UAS"] = metrics["UAS"].f1 * 100
-            print(f"UAS : {stage_stats['UAS']} LAS : {stage_stats['LAS']}")
+            stage_stats["UPOS"] = metrics["UPOS"].f1 * 100
+            print(
+                f"UPOS : {stage_stats['UPOS']} , UAS : {stage_stats['UAS']} LAS : {stage_stats['LAS']}"
+            )
         if (
             stage == sb.Stage.VALID
         ):  # Optimization of learning rate, logging, checkpointing
             wandb_stats = {"epoch": epoch}
             wandb_stats = {**wandb_stats, **stage_stats}
             wandb.log(wandb_stats)
-            self.checkpointer.save_and_keep_only(
-                meta={"LAS": stage_stats["LAS"]}, max_keys=["LAS"]
-            )
+            # self.checkpointer.save_and_keep_only(
+            #    meta={"LAS": stage_stats["LAS"]}, max_keys=["LAS"]
+            # )
 
     def init_optimizers(self):
         "Initializes the model optimizer"
@@ -176,7 +180,6 @@ class Parser(sb.core.Brain):
     def fit_batch(self, batch):
         """Train the parameters given a single batch in input"""
         if self.auto_mix_prec:
-            print("MIXED PREC")
             self.model_optimizer.zero_grad()
 
             with torch.cuda.amp.autocast():
@@ -184,7 +187,6 @@ class Parser(sb.core.Brain):
                 loss = self.compute_objectives(outputs, batch, sb.Stage.TRAIN)
 
             self.scaler.scale(loss).backward()
-            plot_grad_flow(self.hparams.modules["parser"].named_parameters())
             self.scaler.unscale_(self.model_optimizer)
 
             if self.check_gradients(loss):
@@ -196,7 +198,8 @@ class Parser(sb.core.Brain):
 
             loss = self.compute_objectives(outputs, batch, sb.Stage.TRAIN)
             loss.backward()
-            # plot_grad_flow(self.hparams.modules["parser"].named_parameters())
+            plot_grad_flow(self.hparams.modules["parser"].named_parameters())
+            # exit()
             if self.check_gradients(loss):
                 self.model_optimizer.step()
 
@@ -207,11 +210,17 @@ class Parser(sb.core.Brain):
         newEmb = []
         for b_e, b_w_end in zip(emb, words_end_position):
             newEmb.append(b_e[b_w_end].to(self.device))
-        return newEmb
+        return torch.nn.utils.rnn.pad_sequence(newEmb, batch_first=True)
         # return pad_sequence(newEmb, batch_first=True)
 
     def extract_features(self, tokens, words_end_position):
-        features = self.hparams.lm_model.get_embeddings(tokens)
+        # features = self.hparams.lm_model.get_embeddings(tokens)
+        # print(tokens)
+        features = self.camembert(tokens)["last_hidden_state"]
+        features = features[:, 1:-1, :]  # Remove <bos> and <eos>
+        # print(features.shape)
+        # print(words_end_position)
+        # print(self.tokenizer.convert_ids_to_tokens(tokens[0]))
         return self.get_last_subword_emb(features, words_end_position)
 
     def create_words_list(self, words):
@@ -261,7 +270,8 @@ def dataio_prepare(hparams, tokenizer):
         yield sent_id
         wrd = " ".join(words)
         yield words
-        tokens_list = tokenizer.encode_as_ids(wrd)
+        # tokens_list = tokenizer.encode_as_ids(wrd)
+        tokens_list = tokenizer.encode_plus(wrd)["input_ids"]
         yield tokens_list
         tokens_bos = torch.LongTensor([hparams["bos_index"]] + (tokens_list))
         yield tokens_bos
@@ -271,7 +281,10 @@ def dataio_prepare(hparams, tokenizer):
         yield tokens
         tokens_conllu = []
         for i, str in enumerate(words):
-            tokens_conllu.extend([i + 1] * len(tokenizer.encode_as_ids(str)))
+            # tokens_conllu.extend([i + 1] * len(tokenizer.encode_as_ids(str)))
+            tokens_conllu.extend(
+                [i + 1] * len(tokenizer.encode_plus(str)["input_ids"][1:-1])
+            )
         x = []
         y = 0
         for t_c in reversed(tokens_conllu):
@@ -292,7 +305,7 @@ def dataio_prepare(hparams, tokenizer):
         """
         compute gold configuration here
         """
-        pos_tokens = pos
+        pos_tokens = torch.tensor([pos_dict.get(p) for p in pos])
         yield pos_tokens
         yield head
         dep_token = [dep_label_dict.get(d) for d in dep]
@@ -340,12 +353,41 @@ dep_label_dict = {
     "INSERTION": 15,
     "DELETION": 16,
 }
-
 reverse_dep_label_dict = {v: k for k, v in dep_label_dict.items()}
+
+
+pos_dict = {
+    "PADDING": 0,
+    "ADV": 1,
+    "CLS": 2,
+    "VRB": 3,
+    "PRE": 4,
+    "INT": 5,
+    "DET": 6,
+    "NOM": 7,
+    "COO": 8,
+    "CLI": 9,
+    "ADJ": 10,
+    "VNF": 11,
+    "CSU": 12,
+    "ADN": 13,
+    "PRQ": 14,
+    "VPP": 15,
+    "PRO": 16,
+    "NUM": 17,
+    "X": 18,
+    "CLN": 19,
+    "VPR": 20,
+    "INSERTION": 21,
+}
+
+reverse_pos_dict = {v: k for k, v in pos_dict.items()}
 
 
 def main():
     wandb.init()
+
+    # end test debug
     # Load hyperparameters file with command-line overrides
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
     with open(hparams_file) as fin:
@@ -364,7 +406,12 @@ def main():
     run_on_main(hparams["pretrainer"].collect_files)
     hparams["pretrainer"].load_collected(device=run_opts["device"])
 
-    tokenizer = hparams["tokenizer"]
+    # test debug
+    tokenizer = CamembertTokenizerFast.from_pretrained("camembert-base")
+    camembert = CamembertModel.from_pretrained("camembert-base").to(run_opts["device"])
+    for param in camembert.parameters():
+        param.require_grad = False
+    # tokenizer = hparams["tokenizer"]
 
     # Create the datasets objects as well as tokenization and encoding :-D
     train_data, valid_data, test_data = dataio_prepare(hparams, tokenizer)
@@ -375,6 +422,10 @@ def main():
         run_opts=run_opts,
         checkpointer=hparams["checkpointer"],
     )
+    brain.camembert = camembert
+    brain.tokenizer = tokenizer
+    for param in brain.hparams.modules["lm_model"].parameters():
+        param.require_grad = False
     brain.data_valid = []
     brain.fit(
         brain.hparams.epoch_counter,
@@ -383,6 +434,7 @@ def main():
         train_loader_kwargs=hparams["dataloader_options"],
         valid_loader_kwargs=hparams["test_dataloader_options"],
     )
+
     # print(brain.profiler.key_averages().table(sort_by="self_cpu_time_total"))
 
 

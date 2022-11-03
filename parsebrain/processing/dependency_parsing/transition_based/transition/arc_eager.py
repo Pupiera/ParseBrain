@@ -35,12 +35,14 @@ class ArcEagerTransition(Transition):
     def get_relation_from_decision(
         self, decision: int, config: Configuration
     ) -> (torch.Tensor, torch.Tensor):
+        """
+        Maube this is a specfic computer and should not be here.
 
+        """
         try:
             stack = config.stack[-1]
         except IndexError:
             device = config.buffer[0].device
-            # toDo: putting this in config as it's own method. (remove torch in transition)
             stack = torch.zeros(config.buffer[0].size()).to(device)
         try:
             buffer = config.buffer[0]
@@ -61,14 +63,15 @@ class ArcEagerTransition(Transition):
         label of syntactic relationship.
         """
         key = None
-        if decision == self.LEFT:
+        try:
             stack_head = config.stack_string[-1]
             buffer_head = config.buffer_string[0]
+        except IndexError:
+            return key
+        if decision == self.RIGHT:
             key = buffer_head.position
             tree[key] = {"head": stack_head.position}
-        elif decision == self.RIGHT:
-            stack_head = config.stack_string[-1]
-            buffer_head = config.buffer_string[0]
+        elif decision == self.LEFT:
             key = stack_head.position
             tree[key] = {"head": buffer_head.position}
         return key
@@ -114,8 +117,9 @@ class ArcEagerTransition(Transition):
         """
         Condition is terminal if buffer is empty
         (can't create any new arc if everything is on the stack)
+        Using buffer string to ignore potentially padded element in buffer.
         """
-        return len(config.buffer) == 0
+        return len(config.buffer_string) == 0
 
     @staticmethod
     def has_head(wi: Word, arc: List[Arc]) -> bool:
@@ -146,9 +150,7 @@ class ArcEagerTransition(Transition):
         """
         Pop first element of buffer on the top of the stack
         Shift: (σ, wi|β, A) ⇒ (σ|wi, β, A)
-        >>> conf = Configuration()
-        >>> conf.buffer = ["Hey", "Parsing", "Is", "Fun"]
-        >>> conf.buffer_string = ["Hey", "Parsing", "Is", "Fun"]
+        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],["Hey", "Parsing", "Is", "Fun"])
         >>> x = ArcEagerTransition()
         >>> conf = x.shift(conf)
         >>> conf.buffer, conf.stack.pop()
@@ -177,9 +179,7 @@ class ArcEagerTransition(Transition):
         Reduce: (σ|wi, β, A) ⇒ (σ, β, A)    HEAD(wi)
         :return:
 
-        >>> conf = Configuration()
-        >>> conf.buffer = ["Hey", "Parsing", "Is", "Fun"]
-        >>> conf.buffer_string = ["Hey", "Parsing", "Is", "Fun"]
+        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],["Hey", "Parsing", "Is", "Fun"])
         >>> x = ArcEagerTransition()
         >>> conf = x.shift(conf)
         >>> conf = x.shift(conf)
@@ -206,9 +206,7 @@ class ArcEagerTransition(Transition):
         """
         Right-Arc: (σ|wi, wj|β, A) ⇒ (σ|wi|wj, β, A ∪ {wi → wj})
         :return:
-        >>> conf = Configuration()
-        >>> conf.buffer = ["Hey", "Parsing", "Is", "Fun"]
-        >>> conf.buffer_string = ["Hey", "Parsing", "Is", "Fun"]
+        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],["Hey", "Parsing", "Is", "Fun"])
         >>> x = ArcEagerTransition()
         >>> conf = x.shift(conf)
         >>> conf = x.right_arc(conf)
@@ -241,15 +239,12 @@ class ArcEagerTransition(Transition):
     def left_arc(config: Configuration) -> Configuration:
         """
         Left-Arc: (σ|wi, wj|β, A) ⇒ (σ, wj|β, A ∪ {wi ← wj})    ¬HEAD(wi )
-        >>> conf = Configuration()
-        >>> conf.buffer = ["Hey", "Parsing", "Is", "Fun"]
-        >>> conf.buffer_string = ["Hey", "Parsing", "Is", "Fun"]
+        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],["Hey", "Parsing", "Is", "Fun"])
         >>> x = ArcEagerTransition()
         >>> conf = x.shift(conf)
         >>> conf = x.left_arc(conf)
         >>> conf.buffer, conf.stack, conf.arc[-1].head, conf.arc[-1].dependent
         (['Parsing', 'Is', 'Fun'], [], 'Parsing', 'Hey')
-        >>>
         >>> conf.buffer_string, conf.stack_string, conf.arc[-1].head, conf.arc[-1].dependent
         (['Parsing', 'Is', 'Fun'], [], 'Parsing', 'Hey')
         >>>
