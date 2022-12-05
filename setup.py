@@ -41,6 +41,7 @@ setup(
         "torchaudio",
         "tqdm",
         "huggingface_hub",
+        "python-Levenshtein",
     ],
     python_requires=">=3.7",
     # url="https://speechbrain.github.io/",
