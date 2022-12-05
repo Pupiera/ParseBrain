@@ -727,6 +727,70 @@ class ASR(sb.core.Brain):
             with open(self.hparams.wer_file, "w") as w:
                 self.wer_metric.write_stats(w)
 
+    def transcribe_dataset(
+        self,
+        dataset,  # Must be obtained from the dataio_function
+        min_key,  # We load the model with the lowest WER
+        loader_kwargs,  # opts for the dataloading
+        max_key=None,
+    ):
+        # If dataset isn't a Dataloader, we create it.
+        if not isinstance(dataset, DataLoader):
+            loader_kwargs["ckpt_prefix"] = None
+            dataset = self.make_dataloader(dataset, sb.Stage.TEST, **loader_kwargs)
+        # loading best model
+        self.on_evaluate_start(min_key=min_key, max_key=max_key)
+        # eval mode (remove dropout etc)
+        self.modules.eval()
+
+        # Now we iterate over the dataset and we simply compute_forward and decode
+        with torch.no_grad():
+            WER = []
+            for batch in tqdm(dataset, dynamic_ncols=True):
+
+                # Make sure that your compute_forward returns the predictions !!!
+                # In the case of the template, when stage = TEST, a beam search is applied
+                # in compute_forward().
+                predictions = self.compute_forward(batch, stage=sb.Stage.TEST)
+                (
+                    p_ctc,
+                    wav_lens,
+                    p_depLabel,
+                    p_govLabel,
+                    p_posLabel,
+                    seq_len,
+                ) = predictions
+
+                sequence = sb.decoders.ctc_greedy_decode(
+                    p_ctc, wav_lens, blank_id=self.hparams.blank_index
+                )
+                # We go from tokens to words.
+                predicted_words = self.tokenizer(sequence, task="decode_from_list")
+                for i, sent in enumerate(predicted_words):
+                    for w in sent:
+                        if w == "":
+                            predicted_words[i] = [w for w in sent if w != ""]
+                            if len(predicted_words[i]) == 0:
+                                predicted_words[i].append("EMPTY_ASR")
+
+                tokens, tokens_lens = batch.tokens
+                target_words = undo_padding(tokens, tokens_lens)
+                target_words = self.tokenizer(target_words, task="decode_from_list")
+                WER.append(
+                    wer_details_for_batch(batch.id, target_words, predicted_words)
+                )
+                self.Evaluator.decode(
+                    p_depLabel, p_govLabel, predicted_words, p_posLabel, batch.id
+                )
+            st = self.hparams.test_output_conllu
+            order = self.test_order
+            self.Evaluator.writeToCoNLLU(st, order)
+            WER = [item for sublist in WER for item in sublist]
+            with open(self.hparams.transcript_file, "w", encoding="utf-8") as out:
+                for e in WER:
+                    out.write(f"{e['key']}\t{e['WER']}\n")
+            print(f"MEAN WER : {sum([e['WER'] for e in WER]) / len(WER)}")
+
 
 # Define custom data procedure
 def dataio_prepare(hparams, tokenizer):
