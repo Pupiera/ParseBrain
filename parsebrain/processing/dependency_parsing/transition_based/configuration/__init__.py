@@ -1,1 +1,1 @@
-from .configuration import Configuration, GoldConfiguration, Word
+from .configuration import *
