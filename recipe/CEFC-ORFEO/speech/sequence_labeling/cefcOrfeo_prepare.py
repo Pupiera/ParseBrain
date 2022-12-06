@@ -1,1 +1,1 @@
-/home/getalp/pupiera/thesis/endtoend_asr_multitask/src/cefcOrfeo_prepare.py
+../../cefcOrfeo_prepare.py
