@@ -294,7 +294,7 @@ class ASR(sb.core.Brain):
             # need to get predicted words
             if not self.is_training_syntax:
                 sequence = sb.decoders.ctc_greedy_decode(
-                    p_ctc, wav_lens, blank_id=self.hparams.blank_index
+                    predictions["p_ctc"], predictions["wav_lens"], blank_id=self.hparams.blank_index
                 )
                 predicted_words = self.tokenizer(sequence, task="decode_from_list")
                 for i, sent in enumerate(predicted_words):
@@ -318,7 +318,7 @@ class ASR(sb.core.Brain):
             self.stage_wer_details.extend(wer_details)
             if self.is_training_syntax:
                 self.hparams.evaluator.decode(
-                    [p_govLabel, p_depLabel, p_posLabel], predicted_words, ids
+                    [predictions["p_govLabel"], predictions["p_depLabel"], predictions["p_posLabel"]], predicted_words, ids
                 )
         return loss
 
