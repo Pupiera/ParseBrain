@@ -191,6 +191,7 @@ class ASR(sb.core.Brain):
                 compute_alignments=True,
             )
             # format  [('=', 0, 0), ('D', 1, None), ('=', 2, 1), ('S', 3, 2), ('I', None, 3)]
+            # ie : (type of token, gold_position, system_position)
             wer_alig = [a["alignment"] for a in wer_details_alig]
             (
                 dep2Label_gov,
@@ -346,6 +347,13 @@ class ASR(sb.core.Brain):
         for key, value in self.modules.items():
             print(key)
             print(sum(p.numel() for p in value.parameters()))
+
+    @property
+    def _optimizer_step_limit_exceeded(self):
+        return (
+            self.optimizer_step_limit is not None
+            and self.optimizer_step >= self.optimizer_step_limit
+        )
 
     def fit(
         self,
@@ -506,7 +514,6 @@ class ASR(sb.core.Brain):
                         self.on_stage_end,
                         args=[sb.Stage.VALID, avg_valid_loss, epoch],
                     )
-
             # Debug mode only runs a few epochs
             if (
                 self.debug
@@ -514,10 +521,6 @@ class ASR(sb.core.Brain):
                 or self._optimizer_step_limit_exceeded
             ):
                 break
-
-    """
-    This class is used to factorized common behavior of the different version of wav2tree
-    """
 
     def on_fit_start(self):
         """Gets called at the beginning of ``fit()``, on multiple processes
@@ -643,23 +646,27 @@ class ASR(sb.core.Brain):
             if self.is_training_syntax:
                 if stage == sb.Stage.VALID:
                     st = self.hparams.dev_output_conllu
-                    goldPath_CoNLLU = self.goldPath_CoNLLU_dev
+                    goldPath_CoNLLU = self.hparams.dev_gold_conllu
+                    alig_file = self.hparams.alig_path + "_valid"
                     order = self.dev_order
                 else:
                     st = self.hparams.test_output_conllu
-                    goldPath_CoNLLU = self.goldPath_CoNLLU_test
+                    goldPath_CoNLLU = self.hparams.test_gold_conllu
+                    alig_file = self.hparams.alig_path + "_test"
                     order = self.test_order
+                print(self.hparams.evaluator.decoded_sentences)
+                print(order)
                 self.hparams.evaluator.writeToCoNLLU(st, order)
 
                 # write accumulated wer_details.
                 self.stage_wer_details = natsorted(
                     self.stage_wer_details, key=itemgetter(*["key"])
                 )
-                with open(self.hparams.alig_path, "w", encoding="utf-8") as f_out:
+                with open(alig_file, "w", encoding="utf-8") as f_out:
                     print_alignments(self.stage_wer_details, file=f_out)
 
                 metrics_dict = self.hparams.evaluator.evaluateCoNLLU(
-                    goldPath_CoNLLU, st, self.hparams.alig_path
+                    goldPath_CoNLLU, st, alig_file
                 )
                 stage_stats["LAS"] = metrics_dict["LAS"].f1 * 100
                 stage_stats["UAS"] = metrics_dict["UAS"].f1 * 100
@@ -667,9 +674,6 @@ class ASR(sb.core.Brain):
                 stage_stats["SENTENCES"] = metrics_dict["Sentences"].precision * 100
                 stage_stats["Tokens"] = metrics_dict["Tokens"].precision * 100
                 stage_stats["UPOS"] = metrics_dict["UPOS"].f1 * 100
-
-                # stage_stats["DEP"] = self.dep2Label_metrics.summarize("F-score")
-                # stage_stats["GOV"] = self.gov2Label_metrics.summarize("F-score")
             try:
                 start_syntax_wer = self.hparams.start_syntax_WER
             except:
@@ -740,6 +744,7 @@ class ASR(sb.core.Brain):
             dataset = self.make_dataloader(dataset, sb.Stage.TEST, **loader_kwargs)
         # loading best model
         self.on_evaluate_start(min_key=min_key, max_key=max_key)
+        self.wer_metric = self.hparams.error_rate_computer()
         # eval mode (remove dropout etc)
         self.modules.eval()
 
@@ -751,6 +756,7 @@ class ASR(sb.core.Brain):
                 # Make sure that your compute_forward returns the predictions !!!
                 # In the case of the template, when stage = TEST, a beam search is applied
                 # in compute_forward().
+                ids = batch.id
                 predictions = self.compute_forward(batch, stage=sb.Stage.TEST)
                 (
                     p_ctc,
@@ -776,20 +782,28 @@ class ASR(sb.core.Brain):
                 tokens, tokens_lens = batch.tokens
                 target_words = undo_padding(tokens, tokens_lens)
                 target_words = self.tokenizer(target_words, task="decode_from_list")
-                WER.append(
-                    wer_details_for_batch(batch.id, target_words, predicted_words)
+                wer_details = wer_details_for_batch(
+                    ids=ids,
+                    refs=target_words,
+                    hyps=predicted_words,
+                    compute_alignments=True,
                 )
-                self.Evaluator.decode(
-                    p_depLabel, p_govLabel, predicted_words, p_posLabel, batch.id
+                WER.extend(wer_details)
+                self.wer_metric.append(ids, predicted_words, target_words)
+                self.hparams.evaluator.decode(
+                    [p_govLabel, p_depLabel, p_posLabel], predicted_words, ids
                 )
             st = self.hparams.test_output_conllu
+
             order = self.test_order
-            self.Evaluator.writeToCoNLLU(st, order)
-            WER = [item for sublist in WER for item in sublist]
-            with open(self.hparams.transcript_file, "w", encoding="utf-8") as out:
-                for e in WER:
-                    out.write(f"{e['key']}\t{e['WER']}\n")
-            print(f"MEAN WER : {sum([e['WER'] for e in WER]) / len(WER)}")
+            self.hparams.evaluator.writeToCoNLLU(st, order)
+
+            WER = natsorted(WER, key=itemgetter(*["key"]))
+            with open(self.hparams.alig_path + "_test", "w", encoding="utf-8") as f_out:
+                print_alignments(WER, file=f_out)
+
+            wer_metric = self.wer_metric.summarize()
+            print(f"WER : {wer_metric}")
 
 
 # Define custom data procedure
@@ -937,6 +951,7 @@ def dataio_prepare(hparams, tokenizer):
         except TypeError:
             print(wrd)
             print(poss)
+            print([label_alphabet[2].get(p) for p in poss.split(" ")])
         yield pos_list
         fullLabel = encoding.encodeFromList(
             [w for w in wrd.split(" ")],
@@ -1049,7 +1064,6 @@ if __name__ == "__main__":
     path_encoded_train = "all.seq"  # For alphabet generation
     label_alphabet = build_label_alphabet(path_encoded_train)
     reverse_label_alphabet = build_reverse_alphabet(label_alphabet)
-    print(label_alphabet)
     # Load hyperparameters file with command-line overrides
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
     with open(hparams_file) as fin:
@@ -1115,12 +1129,10 @@ if __name__ == "__main__":
     asr_brain.is_training_syntax = False
     asr_brain.hparams.evaluator.set_alphabet(label_alphabet)
     # Diverse information on the data such as PATH and order of sentences.
-    asr_brain.goldPath_CoNLLU_dev = goldPath_CoNLLU_dev
-    asr_brain.goldPath_CoNLLU_test = goldPath_CoNLLU_test
-    print(asr_brain.goldPath_CoNLLU_dev)
-    asr_brain.dev_order = get_id_from_CoNLLfile(goldPath_CoNLLU_dev)
-    asr_brain.test_order = get_id_from_CoNLLfile(goldPath_CoNLLU_test)
+    asr_brain.dev_order = get_id_from_CoNLLfile(hparams["dev_gold_conllu"])
+    asr_brain.test_order = get_id_from_CoNLLfile(hparams["test_gold_conllu"])
     encoding = asr_brain.hparams.encoding
+    asr_brain.optimizer_step_limit = None
     # Training
     try:
         asr_brain.fit(
@@ -1143,9 +1155,7 @@ if __name__ == "__main__":
             except:
                 pass
         raise RuntimeError() from e
-
     # Test
-
     asr_brain.hparams.wer_file = hparams["output_folder"] + "/wer_test.txt"
     asr_brain.evaluate(
         test_data,
@@ -1154,9 +1164,18 @@ if __name__ == "__main__":
     )
 
     # transcribe
-
+    run_on_main(
+        asr_brain.transcribe_dataset,
+        kwargs={
+            "dataset": test_data,
+            "min_key": "WER",
+            "loader_kwargs": hparams["test_dataloader_options"],
+        },
+    )
+    """
     asr_brain.transcribe_dataset(
         dataset=test_data,  # Must be obtained from the dataio_function
         min_key="WER",
         loader_kwargs=hparams["test_dataloader_options"],
     )
+    """
