@@ -93,6 +93,7 @@ class ASR(sb.core.Brain):
         # [batch,time,76] (76 in output neurons corresponding to BPE size)
         p_ctc = self.hparams.log_softmax(logits)
         # Forward pass dependency parsing
+        result = {"p_ctc": p_ctc, "wav_lens": wav_lens}
         if self.is_training_syntax:
             sequence, mapFrameToWord = ctc_greedy_decode(
                 p_ctc, wav_lens, blank_id=self.hparams.blank_index
@@ -111,8 +112,14 @@ class ASR(sb.core.Brain):
             p_depLabel = self.hparams.log_softmax(logits_depLabel)
             logits_govLabel = self.modules.govDep2Label(lstm_out)
             p_govLabel = self.hparams.log_softmax(logits_govLabel)
-            return p_ctc, wav_lens, p_depLabel, p_govLabel, p_posLabel, seq_len
-        return p_ctc, wav_lens
+            result_parsing = {
+                "p_posLabel": p_posLabel,
+                "p_depLabel": p_depLabel,
+                "p_govLabel": p_govLabel,
+                "seq_len": seq_len,
+            }
+            result = {**result, **result_parsing}
+        return result
 
     def _create_inputDep(self, x, mapFrameToWord):
         """
@@ -244,17 +251,23 @@ class ASR(sb.core.Brain):
         }
 
     def compute_objectives(self, predictions, batch, stage):
+        """
         if self.is_training_syntax:
             p_ctc, wav_lens, p_depLabel, p_govLabel, p_posLabel, seq_len = predictions
         else:
             p_ctc, wav_lens = predictions
+        """
         ids = batch.id
 
         tokens, tokens_lens = batch.tokens
-        loss = self.hparams.ctc_cost(p_ctc, tokens, wav_lens, tokens_lens)
+        loss = self.hparams.ctc_cost(
+            predictions["p_ctc"], tokens, predictions["wav_lens"], tokens_lens
+        )
         if self.is_training_syntax:
             sequence = sb.decoders.ctc_greedy_decode(
-                p_ctc, wav_lens, blank_id=self.hparams.blank_index
+                predictions["p_ctc"],
+                predictions["wav_lens"],
+                blank_id=self.hparams.blank_index,
             )
             predicted_words = self.tokenizer(sequence, task="decode_from_list")
             for i, sent in enumerate(predicted_words):
@@ -264,7 +277,12 @@ class ASR(sb.core.Brain):
                         if len(predicted_words[i]) == 0:
                             predicted_words[i].append("EMPTY_ASR")
             loss_dict = self.compute_objectives_syntax(
-                predicted_words, p_depLabel, p_govLabel, p_posLabel, seq_len, batch
+                predicted_words,
+                predictions["p_depLabel"],
+                predictions["p_govLabel"],
+                predictions["p_posLabel"],
+                predictions["seq_len"],
+                batch,
             )
             loss = (
                 loss * 0.4
