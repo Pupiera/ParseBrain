@@ -38,16 +38,18 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         self.stack_depth = stack_depth
         self.dim = dim
 
-    # toDo: Rework this function (replace with compute_feature_batch_fixed_size when finished and optimized)
-    def compute_feature(self, stack: List, buffer: List, device: str):
+    def compute_feature(
+        self, stack: List[List[int]], buffer: List[List[int]], device: str
+    ):
         """
         Return a tensor of shape [batch, (1+self.stack_depth)*dim]
         Adapted for fully connected.
+        This version is around 5% better than the previous one on GPU. (slower on cpu)
         >>> x = ConfigurationFeaturesComputerConcat(2, 10)
         >>> stack = [[torch.ones(10)*3], []]
         >>> buffer = [[torch.ones(10)*5],[]]
         >>> computer = ConfigurationFeaturesComputerConcat(2, 10)
-        >>> x = computer.compute_feature(stack, buffer, "cpu")
+        >>> x = computer.compute_feature_v2(stack, buffer, "cpu")
         >>> x
         tensor([[5., 5., 5., 5., 5., 5., 5., 5., 5., 5., 3., 3., 3., 3., 3., 3., 3., 3.,
                  3., 3., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
@@ -56,52 +58,25 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         >>> x.shape
         torch.Size([2, 30])
         """
-        # ToDo: replace torch.zeros with something allowing us to control padding value.
-        # ToDo: Allow different buffer window
+        # todo: find way to remove for loop...
+        n_buffer = 1
         batch_size = len(stack)
         emb_stack = torch.zeros((batch_size, self.stack_depth, self.dim)).to(device)
-        emb_buffer = torch.zeros((batch_size, self.dim)).to(device)
-        for i, x in enumerate(stack):
-            try:
-                tmp_stack = torch.stack(x[-self.stack_depth :])
-                emb_stack[i, 0 : tmp_stack.shape[0], :] = tmp_stack
-            except RuntimeError:
-                # happen if the stack is empty, nothing to add
-                pass
-        for i, x in enumerate(buffer):
-            x = x[0:1]
-            try:
-                tmp_buffer = torch.stack(x)
-                emb_buffer[i, :] = tmp_buffer
-            except RuntimeError:
-                # happen if the buffer is empty
-                pass
-            except TypeError:
-                try:
-                    emb_buffer[i, :] = x
-                except RuntimeError:
-                    pass
-                    # do nothing
-        return torch.cat((emb_buffer, emb_stack.reshape(batch_size, -1)), dim=1)
+        emb_buffer = torch.zeros((batch_size, n_buffer, self.dim)).to(device)
 
-        """
-        tmp_stack = []
-        for x in stack:
-            try:
-                tmp_stack.append(torch.stack(x[-stack_depth:]))
-            except RuntimeError:
-                # x[-stack_depth:] empty
-                tmp_stack.append(torch.zeros(size=(1, self.dim)).to(device))
+        stack_list = [torch.stack(x[-self.stack_depth :]) if x else [] for x in stack]
+        for i, s in enumerate(stack_list):
+            if len(s) > 0:
+                emb_stack[i, 0 : s.shape[0], :] = s
 
-        e_stack = torch.nn.utils.rnn.pad_sequence(
-            tmp_stack,
-            batch_first=True,
-            padding_value=0.0,
+        buffer_list = [torch.stack(x[-n_buffer:]) if x else [] for x in buffer]
+        for i, b in enumerate(buffer_list):
+            if len(b) > 0:
+                emb_buffer[i, 0 : b.shape[0], :] = b
+        return torch.cat(
+            (emb_buffer.reshape(batch_size, -1), emb_stack.reshape(batch_size, -1)),
+            dim=1,
         )
-
-        emb_stack[:, 0 : emb_stack.shape[1], :].reshape(batch_size, -1).to(device)
-        return emb_stack
-        """
 
 
 class ConfigurationFeaturesComputerConcatRNN(ConfigurationFeaturesComputerConcat):
