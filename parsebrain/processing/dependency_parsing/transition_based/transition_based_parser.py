@@ -325,6 +325,5 @@ class TransitionBasedParser:
         batch_rep = self.label_policie.compute_representation_batch(
             config, decision, self.transition
         )
-        print(batch_rep.shape)
         label_score = self.label_neural_network(batch_rep)
         return label_score, mask
