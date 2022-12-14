@@ -84,10 +84,10 @@ class TransitionBasedParser:
             # Batched decision score for UAS
             features = self._compute_features(config)
             # features = torch.stack(features)
-            decision_score = self._decision_score(
-                features
-            )  # shape = [batch, nb_decision]
+            # shape = [batch, nb_decision]
+            decision_score = self._decision_score(features)
             # append it to the correct sequence of decision
+            # Todo: Maybe use map()?
             for i, d_score in enumerate(decision_score):
                 list_decision_score[i].append(d_score)
 
@@ -322,12 +322,8 @@ class TransitionBasedParser:
         """
         # fill mask with 1 when decision taken can't create a label (ie not an arc)
         mask = [1 if self.transition.require_label(d) else 0 for d in decision]
-        batch_rep = []
-        label_score = None
-        for c, d, m in zip(config, decision, mask):
-            batch_rep.append(
-                self.label_policie.compute_representation(c, d, self.transition)
-            )
-        batch_rep = torch.stack(batch_rep)
+        batch_rep = label_policie.compute_representation_batch(
+            config, decision, transition
+        )
         label_score = self.label_neural_network(batch_rep)
         return label_score, mask

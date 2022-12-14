@@ -39,14 +39,14 @@ class ArcEagerTransition(Transition):
         Maube this is a specfic computer and should not be here.
 
         """
-        try:
+        if len(config.stack) > 0:
             stack = config.stack[-1]
-        except IndexError:
+        else:
             device = config.buffer[0].device
             stack = torch.zeros(config.buffer[0].size()).to(device)
-        try:
+        if len(config.buffer) > 0:
             buffer = config.buffer[0]
-        except IndexError:
+        else:
             device = config.stack[0].device
             buffer = torch.zeros(config.stack[0].size()).to(device)
         if decision == self.RIGHT:
