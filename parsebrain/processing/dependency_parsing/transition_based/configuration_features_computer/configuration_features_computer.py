@@ -12,25 +12,6 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
     """
     This class implement the logics for combining the features from the stack and buffer to take the decision.
     Here the logic is to concatenate the n top element of the stack and the first (next) element of the buffer.
-
-    >>> x = ConfigurationFeaturesComputerConcat(2, 10)
-    >>> buffer = [[torch.ones(10)]]
-    >>> stack = [[torch.zeros(10), torch.ones(10)]]
-    >>> y = x.compute_feature(stack, buffer ,"cpu")
-    >>> y
-    tensor([[1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 0., 0., 0., 0., 0., 0., 0., 0.,
-             0., 0., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.]])
-    >>>
-
-    >>> x = ConfigurationFeaturesComputerConcat(4, 10)
-    >>> buffer = [[torch.ones(10)]]
-    >>> stack = [[torch.zeros(10), torch.ones(10)]]
-    >>> y = x.compute_feature(stack, buffer, "cpu")
-    >>> y
-    tensor([[1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 0., 0., 0., 0., 0., 0., 0., 0.,
-             0., 0., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 0., 0., 0., 0., 0., 0.,
-             0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]])
-    >>>
     """
 
     def __init__(self, stack_depth: int, dim: int):
@@ -39,7 +20,7 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         self.dim = dim
 
     def compute_feature(
-        self, stack: List[List[int]], buffer: List[List[int]], device: str
+        self, stack: List[List[int]], buffer: List[torch.Tensor], device: str
     ):
         """
         Return a tensor of shape [batch, (1+self.stack_depth)*dim]
@@ -47,9 +28,9 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         This version is around 5% better than the previous one on GPU. (slower on cpu)
         >>> x = ConfigurationFeaturesComputerConcat(2, 10)
         >>> stack = [[torch.ones(10)*3], []]
-        >>> buffer = [[torch.ones(10)*5],[]]
+        >>> buffer = [torch.ones((5,10)*5),[]]
         >>> computer = ConfigurationFeaturesComputerConcat(2, 10)
-        >>> x = computer.compute_feature_v2(stack, buffer, "cpu")
+        >>> x = computer.compute_feature(stack, buffer, "cpu")
         >>> x
         tensor([[5., 5., 5., 5., 5., 5., 5., 5., 5., 5., 3., 3., 3., 3., 3., 3., 3., 3.,
                  3., 3., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
@@ -68,8 +49,7 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         for i, s in enumerate(stack_list):
             if len(s) > 0:
                 emb_stack[i, 0 : s.shape[0], :] = s
-
-        buffer_list = [torch.stack(x[-n_buffer:]) if x else [] for x in buffer]
+        buffer_list = [x[-n_buffer:] for x in buffer]
         for i, b in enumerate(buffer_list):
             if len(b) > 0:
                 emb_buffer[i, 0 : b.shape[0], :] = b

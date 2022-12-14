@@ -322,8 +322,9 @@ class TransitionBasedParser:
         """
         # fill mask with 1 when decision taken can't create a label (ie not an arc)
         mask = [1 if self.transition.require_label(d) else 0 for d in decision]
-        batch_rep = label_policie.compute_representation_batch(
-            config, decision, transition
+        batch_rep = self.label_policie.compute_representation_batch(
+            config, decision, self.transition
         )
+        print(batch_rep.shape)
         label_score = self.label_neural_network(batch_rep)
         return label_score, mask

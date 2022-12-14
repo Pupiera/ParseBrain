@@ -54,5 +54,5 @@ class LabelPolicieEmbedding(LabelPolicie):
             dep.append(d)
         head = torch.stack(head)
         dep = torch.stack(dep)
-        rep = torch.cat((head, dep))
+        rep = torch.cat((head, dep), dim=1)
         return rep
