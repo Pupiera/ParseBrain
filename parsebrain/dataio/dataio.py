@@ -47,6 +47,7 @@ def load_data_conllu(conllu_path: str, keys: List, replacement: dict = {}):
                 continue
             if not line:  # end of sentence
                 try:
+                    current_sent.set_sent_len(len(current_sent[keys[0]]))
                     result[sent_id] = current_sent
                 except KeyError:
                     raise KeyError(

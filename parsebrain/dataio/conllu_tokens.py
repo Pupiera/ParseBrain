@@ -12,6 +12,9 @@ class ConlluDict(dict):
     def set_sent_id(self, sent_id: str):
         self["sent_id"] = sent_id
 
+    def set_sent_len(self, sent_len: int):
+        self["sent_len"] = sent_len
+
     def is_empty(self, keys: List):
         """
         Test the first key in the list of key.

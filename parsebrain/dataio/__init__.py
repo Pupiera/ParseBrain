@@ -7,3 +7,4 @@ for filename in os.listdir(os.path.dirname(__file__)):
         __all__.append(filename[:-3])
 
 from . import *
+from .dataio import load_data_conllu
