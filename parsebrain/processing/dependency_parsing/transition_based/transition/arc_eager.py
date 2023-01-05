@@ -6,7 +6,7 @@ from parsebrain.processing.dependency_parsing.transition_based.configuration imp
     Configuration,
     Word,
 )
-from .arc import Arc, Right_Arc, Left_Arc
+from .arc import Arc, RightArc, LeftArc
 from .transition import Transition
 
 
@@ -81,6 +81,7 @@ class ArcEagerTransition(Transition):
         apply the given decision
         In case where the state is terminal do nothing (Padding)
         """
+        # todo: if nothing is valid, backup solution. (this means the parser did some very bad thing, such as only shifting)
         if self.is_terminal(config):
             return config
 
@@ -141,8 +142,8 @@ class ArcEagerTransition(Transition):
         Condition to fullfill for shift to be available
         :return:
         """
-        return len(config.buffer) > 1 or (
-            len(config.buffer) == 1 and len(config.stack) == 0
+        return len(config.buffer_string) > 1 or (
+            len(config.buffer_string) == 1 and len(config.stack_string) == 0
         )
 
     @staticmethod
@@ -167,6 +168,15 @@ class ArcEagerTransition(Transition):
 
     @staticmethod
     def reduce_condition(config: Configuration) -> bool:
+        # safeguard against reduce to remove case where we get a isolated word.
+        # if len of stack and len of buffer is 1, can't reduce
+        # unless the last element in buffer already has an head.
+        if (
+            len(config.stack_string) == 1
+            and len(config.buffer_string) == 1
+            and not ArcEagerTransition.has_head(config.buffer_string[0], config.arc)
+        ):
+            return False
         try:
             wi = config.stack_string[-1]
         except IndexError:
@@ -197,7 +207,17 @@ class ArcEagerTransition(Transition):
 
     @staticmethod
     def right_arc_condition(config: Configuration) -> bool:
-        if len(config.stack) > 0 and len(config.buffer) > 0:
+        """
+        A right arc can be created if there is an element in the stack (futur head)
+        and an element in the buffer (futur dependent).
+        If the stack if empty and the root has yet to be chosen then the root relation can be formed.
+        The stack need to be empty because the root is the first element in the stack (if there is element in the stack
+        the root is not on top of the stack)
+        """
+        if (
+            len(config.stack_string) > 0
+            or (not config.has_root and len(config.stack_string) == 0)
+        ) and len(config.buffer_string) > 0:
             return True
         return False
 
@@ -216,23 +236,36 @@ class ArcEagerTransition(Transition):
         (['Is', 'Fun'], ['Hey', 'Parsing'], 'Hey', 'Parsing')
         >>>
         """
+        # if root case
+        if not config.has_root and len(config.stack_string) == 0:
+            wi = config.root
+            # need to make this value not hardcoded
+            wi_string = config.root_token
+            config.has_root = True
+        else:
+            wi = config.stack[-1]
+            wi_string = config.stack_string[-1]
 
-        wi = config.stack[-1]
-        wi_string = config.stack_string[0]
         wj = config.buffer[0]
         wj_string = config.buffer_string[0]
         config.stack.append(wj)
         config.stack_string.append(wj_string)
-        config.arc.append(Right_Arc(head=wi_string, dependent=wj_string))
+        config.arc.append(RightArc(head=wi_string, dependent=wj_string))
         config.shift_buffer()
         return config
 
     @staticmethod
     def left_arc_condition(config: Configuration) -> bool:
-        try:
-            wi = config.stack_string[-1]
-        except IndexError:
+        # safeguard against isolated word in the end
+        if len(config.stack_string) == 0 or len(config.buffer_string) == 0:
             return False
+        if (
+            len(config.stack_string) == 1
+            and len(config.buffer_string) == 1
+            and not ArcEagerTransition.has_head(config.buffer_string[0], config.arc)
+        ):
+            return False
+        wi = config.stack_string[-1]
         return not ArcEagerTransition.has_head(wi, config.arc)
 
     @staticmethod
@@ -255,7 +288,7 @@ class ArcEagerTransition(Transition):
         wi_string = config.stack_string.pop()
         wj = config.buffer[0]
         wj_string = config.buffer_string[0]
-        config.arc.append(Left_Arc(head=wj_string, dependent=wi_string))
+        config.arc.append(LeftArc(head=wj_string, dependent=wi_string))
         return config
 
 

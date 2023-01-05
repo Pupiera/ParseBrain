@@ -55,7 +55,7 @@ class DynamicOracleArcEager(DynamicOracle):
         """
         # print(f"{[str(w) for w in configuration.buffer_string]}")
         if len(configuration.buffer) == 0:  # if config is terminal with Arc eager:
-            return -1  # padding
+            return self.oracle_padding_value  # padding
         decision_cost = [
             self.compute_shift_cost(configuration, gold_configuration)
             + int(not ArcEagerTransition.shift_condition(configuration)) * 99999,
@@ -302,12 +302,12 @@ class DynamicOracleArcEager(DynamicOracle):
         try:
             stack_pos = configuration.stack_string[-1].position
         except IndexError:
-            return -1
+            return self.padding_value
         # get info of first element of buffer
         try:
             buffer_pos = configuration.buffer_string[0].position
         except IndexError:
-            return -1
+            return self.padding_value
         # if decision is right arc, stack elt is head
         if decision == transition.RIGHT:
             # Check if this arc exist in gold config
@@ -319,7 +319,7 @@ class DynamicOracleArcEager(DynamicOracle):
             if gold_configuration.heads[stack_pos] == buffer_pos:
                 return gold_configuration.label[stack_pos]
         # if not return -1 (reinforce current prediction of model)
-        return -1
+        return self.padding_value
 
 
 if __name__ == "__main__":

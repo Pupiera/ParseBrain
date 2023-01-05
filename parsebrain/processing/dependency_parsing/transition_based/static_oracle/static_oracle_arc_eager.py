@@ -11,16 +11,19 @@ from parsebrain.processing.dependency_parsing.transition_based.configuration imp
 from parsebrain.processing.dependency_parsing.transition_based.transition import (
     ArcEagerTransition,
 )
-from .static_oracle import StaticOracle
+from parsebrain.processing.dependency_parsing.transition_based.static_oracle import (
+    StaticOracle,
+)
 
 """
 The function compute_sequence is very generic. Maybe for other static oracle, 
 we can create subclass from it and only define best_decision
+Note for the arc eager oracle, if the sentence is non-projective, it won't manage to create tree. 
 """
 
 
 class StaticOracleArcEager(StaticOracle):
-    def __init__(self, padding_value: int = -1):
+    def __init__(self, padding_value: int = 1000):
         super().__init__(padding_value)
         self.transition = ArcEagerTransition()
 
@@ -34,7 +37,8 @@ class StaticOracleArcEager(StaticOracle):
         >>> g_c = [GoldConfiguration(head1), GoldConfiguration(head2)]
         >>> s_oracle = StaticOracleArcEager()
         >>> s_oracle.compute_sequence(g_c)
-        [[0, 1, 0, 2, 2], [0, 0, 1, 2, 3, 2]]
+        tensor([[ 0,  1,  2,  2,  2, -1],
+                [ 2,  0,  1,  2,  3,  2]])
         """
 
         static_sequence = []
@@ -58,16 +62,22 @@ class StaticOracleArcEager(StaticOracle):
     def best_decision(
         self, config: Configuration, gold_config: GoldConfiguration
     ) -> int:
-        try:
-            stack_top = config.stack_string[-1]
-        except IndexError:
-            if self.transition.shift_condition(config):
-                return self.transition.SHIFT
-            else:
-                raise IndexError(
-                    "Static Oracle Arc-Eager : Stack is empty but shift transition not valid in current configuration"
-                )
+        # when buffer is empty, can only reduce.
+        if len(config.buffer_string) == 0:
+            return self.transition.REDUCE
+
         buffer_first = config.buffer_string[0]
+        if len(config.stack_string) > 0:
+            stack_top = config.stack_string[-1]
+        # if root and nothing on stack, create the arc
+        elif gold_config.heads[buffer_first.position] == 0 and not config.has_root:
+            return self.transition.RIGHT
+        elif self.transition.shift_condition(config):
+            return self.transition.SHIFT
+        else:
+            raise IndexError(
+                "Static Oracle Arc-Eager : Stack is empty but shift transition not valid in current configuration"
+            )
         if gold_config.heads[buffer_first.position] == stack_top.position:
             return self.transition.RIGHT
         elif gold_config.heads[stack_top.position] == buffer_first.position:

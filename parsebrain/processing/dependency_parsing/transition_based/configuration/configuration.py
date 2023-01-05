@@ -1,15 +1,29 @@
 from typing import List
-
+import torch
 from torch import Tensor
 
 
 class Configuration:
-    def __init__(self, features: List["Tensor"], features_string: List["Word"]):
+    def __init__(
+        self, features: torch.Tensor, features_string: List["Word"], root_value=None
+    ):
         self.buffer = features
         self.buffer_string = features_string
         self.stack = []
         self.stack_string = []
         self.arc = []
+        # root until linked is as if there is already one element in the stack.
+        if root_value is None:
+            try:
+                self.root = torch.zeros(features[0].shape)
+            except AttributeError:
+                # not a tensor
+                self.root = 0
+        else:
+            self.root = torch.full(features[0].shape, root_value)
+        self.has_root = False
+        # this value will be the value in one arc of the tree.
+        self.root_token = Word("ROOT", 0)
 
     def add_features(self, features: List["Tensor"], features_string: List["Word"]):
         self.buffer = features
@@ -27,7 +41,9 @@ class GoldConfiguration:
     This remove the ambiguity if there is multiple occurrence of the same word.
     """
 
-    def __init__(self, gov: List[int] = None, label: List[str] = None):
+    def __init__(
+        self, gov: List[int] = None, label: List[str] = None, sent_id: str = None
+    ):
         """
         >>> gov = [2,0,2,3]
         >>> lab = ['X','root','Y', 'Z']
@@ -39,8 +55,10 @@ class GoldConfiguration:
         >>> g_c.label
         {1: 'X', 2: 'root', 3: 'Y', 4: 'Z'}
         """
+
         self.heads = {}  # the head of a given word
         self.deps = {}  # the list of dependent of a given word (can be empty)
+        self.sent_id = sent_id
         if gov is not None:
             for i, g in enumerate(gov):
                 g = int(g)
