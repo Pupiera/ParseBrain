@@ -2,6 +2,7 @@
 Recipe for transition based parsing on the CEFC-ORFEO dataset.
 authors : Adrien PUPIER
 """
+import math
 import sys
 import types
 
@@ -21,6 +22,7 @@ from parsebrain.processing.dependency_parsing.transition_based.configuration imp
     Word,
 )
 
+
 from transformers import CamembertModel, CamembertTokenizerFast
 
 
@@ -31,7 +33,9 @@ class Parser(sb.core.Brain):
         tokens = batch.tokens.data
         tokens = tokens.to(self.device)
         tokens_conllu = batch.tokens_conllu.data.to(self.device)
-        features = self.extract_features(tokens, tokens_conllu)
+        features = self.hparams.features_extractor.extract_features(
+            tokens, tokens_conllu
+        )
         seq_len = torch.tensor([len(w) for w in batch.words]).to(self.device)
         config = []
         gold_config = []
@@ -39,27 +43,26 @@ class Parser(sb.core.Brain):
             self.hparams.number_of_epochs_static >= self.hparams.epoch_counter.current
         )
         if stage != sb.Stage.TEST:
-            for wrds, feat, head, dep in zip(
-                batch.words, features, batch.head, batch.dep_tokens
+            for id, wrds, feat, head, dep in zip(
+                batch.sent_id, batch.words, features, batch.head, batch.dep_tokens
             ):
                 # words_list.append(self.create_words_list(wrds))
                 config.append(Configuration(feat, self.create_words_list(wrds)))
-                gold_config.append(GoldConfiguration(head, dep))
+                gold_config.append(GoldConfiguration(head, dep, id))
         else:
             for wrds, feat, head, dep in zip(
                 batch.words, features, batch.head, batch.dep_tokens
             ):
                 # words_list.append(self.create_words_list(wrds))
                 config.append(Configuration(feat, self.create_words_list(wrds)))
-
+        pos_log_prob = self.hparams.neural_network_POS(features)
         if sb.Stage.TRAIN == stage:
             parsing_dict = self.hparams.parser.parse(
                 config, stage, gold_config, static=static
             )
-            pos_log_prob = self.hparams.neural_network_POS(features)
         else:
             parsing_dict = self.hparams.parser.parse(config, stage, gold_config)
-            pos_log_prob = self.hparams.neural_network_POS(features)
+        # print(parsing_dict["parsed_tree"])
         return parsing_dict, seq_len, pos_log_prob
 
     def compute_objectives(self, predictions, batch, stage):
@@ -69,26 +72,25 @@ class Parser(sb.core.Brain):
         pos = batch.pos_tokens.data.to(self.device)
         sent_ids = batch.sent_id
 
-        loss = self.hparams.pos_cost(pos_log_prob, pos, length=seq_len)
-
+        loss_pos = self.hparams.pos_cost(pos_log_prob, pos, length=seq_len)
         self.hparams.acc_dyna.append(
             parsing_dict["parse_log_prob"],
             parsing_dict["oracle_parsing"],
             parsing_dict["oracle_parse_len"],
         )
-        # parse_log_prob = parse_log_prob.transpose(1, -1)
-        loss += self.hparams.parse_cost(
+        loss_parse = self.hparams.parse_cost(
             parsing_dict["parse_log_prob"],
             parsing_dict["oracle_parsing"],
             parsing_dict["oracle_parse_len"],
         )
         # Compute the loss for each element based on decision and only keep relevant one.
         # Allow to compute label in a batch way.
-        loss += self.hparams.label_cost(
+        loss_label = self.hparams.label_cost(
             parsing_dict["label_log_prob"],
             parsing_dict["oracle_label"],
             parsing_dict["oracle_label_len"],
         )
+        loss = 0.3 * loss_pos + 0.4 * loss_parse + 0.3 * loss_label
         # Populate the list that will be written at the end of the stage.
         if sb.Stage.VALID == stage:
             predicted_pos = [
@@ -198,30 +200,13 @@ class Parser(sb.core.Brain):
 
             loss = self.compute_objectives(outputs, batch, sb.Stage.TRAIN)
             loss.backward()
-            plot_grad_flow(self.hparams.modules["parser"].named_parameters())
+            # plot_grad_flow(self.hparams.modules["parser"].named_parameters())
             # exit()
             if self.check_gradients(loss):
                 self.model_optimizer.step()
 
             self.model_optimizer.zero_grad()
         return loss.detach()
-
-    def get_last_subword_emb(self, emb, words_end_position):
-        newEmb = []
-        for b_e, b_w_end in zip(emb, words_end_position):
-            newEmb.append(b_e[b_w_end].to(self.device))
-        return torch.nn.utils.rnn.pad_sequence(newEmb, batch_first=True)
-        # return pad_sequence(newEmb, batch_first=True)
-
-    def extract_features(self, tokens, words_end_position):
-        # features = self.hparams.lm_model.get_embeddings(tokens)
-        # print(tokens)
-        features = self.camembert(tokens)["last_hidden_state"]
-        features = features[:, 1:-1, :]  # Remove <bos> and <eos>
-        # print(features.shape)
-        # print(words_end_position)
-        # print(self.tokenizer.convert_ids_to_tokens(tokens[0]))
-        return self.get_last_subword_emb(features, words_end_position)
 
     def create_words_list(self, words):
         words_list = []
@@ -242,6 +227,7 @@ def dataio_prepare(hparams, tokenizer):
         conllu_path=hparams["train_conllu"],
         keys=hparams["conllu_keys"],
     )
+    train_data = train_data.filtered_sorted(sort_key="sent_len")
 
     valid_data = pb.dataio.dataset.DynamicItemDatasetConllu.from_conllu(
         conllu_path=hparams["valid_conllu"],
@@ -386,10 +372,10 @@ reverse_pos_dict = {v: k for k, v in pos_dict.items()}
 
 def main():
     wandb.init()
-
     # end test debug
     # Load hyperparameters file with command-line overrides
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
+
     with open(hparams_file) as fin:
         hparams = load_hyperpyyaml(fin, overrides)
 
@@ -403,8 +389,8 @@ def main():
         hyperparams_to_save=hparams_file,
         overrides=overrides,
     )
-    run_on_main(hparams["pretrainer"].collect_files)
-    hparams["pretrainer"].load_collected(device=run_opts["device"])
+    # run_on_main(hparams["pretrainer"].collect_files)
+    # hparams["pretrainer"].load_collected(device=run_opts["device"])
 
     # test debug
     tokenizer = CamembertTokenizerFast.from_pretrained("camembert-base")
@@ -422,7 +408,7 @@ def main():
         run_opts=run_opts,
         checkpointer=hparams["checkpointer"],
     )
-    brain.camembert = camembert
+    brain.hparams.features_extractor.set_model(camembert)
     brain.tokenizer = tokenizer
     for param in brain.hparams.modules["lm_model"].parameters():
         param.require_grad = False
