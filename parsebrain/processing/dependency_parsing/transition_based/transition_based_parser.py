@@ -27,6 +27,7 @@ class TransitionBasedParser:
         dynamic_oracle: DynamicOracle = None,
         exploration_rate: int = 0.5,
         static_oracle: StaticOracle = None,
+        oracle_padding_value: int = 1000,
     ):
         if dynamic_oracle is None and static_oracle is None:
             raise ValueError(
@@ -41,6 +42,9 @@ class TransitionBasedParser:
         self.device = None
         self.static_oracle = static_oracle
         self.exploration_rate = exploration_rate
+        # padding value of oracle parsing and oracle label,
+        # -1 cause NaN with NLLL (numerical instability) and NaN * 0 = NaN so mask do not work...
+        self.oracle_padding_value = oracle_padding_value
 
     def parse(
         self,
@@ -92,7 +96,7 @@ class TransitionBasedParser:
                 list_decision_score[i].append(d_score)
 
             if (
-                not static
+                ((sb.Stage.TRAIN == stage and not static) or sb.Stage.VALID == stage)
                 and gold_config is not None
                 and self.dynamic_oracle is not None
             ):
@@ -120,9 +124,11 @@ class TransitionBasedParser:
                     decision_taken = [x[step_seq] for x in oracle_decision]
                     # compute len, maybe more efficient to do it once at the end ? but how?
                     for i, o_d in enumerate(oracle_decision):
+                        # if first time seing oracle padding
                         if (
-                            o_d[step_seq] == -1 and oracle_len[i] == -1
-                        ):  # if first time seing oracle padding
+                            o_d[step_seq] == self.oracle_padding_value
+                            and oracle_len[i] == -1
+                        ):
                             oracle_len[i] = step_seq
             else:
                 # if test or validation, full exploration.
@@ -142,39 +148,22 @@ class TransitionBasedParser:
                         dynamic_oracle_label = self.dynamic_oracle.compute_label(
                             config[i], gold_config[i], decision_taken[i]
                         )
-                        if dynamic_oracle_label == -1:
+                        # if this a error in UAS (couple does not exist), reinforce current predictions.
+                        if dynamic_oracle_label == self.oracle_padding_value:
                             dynamic_oracle_label = torch.argmax(label_score[i])
                         dynamic_oracle_label_decision[i].append(dynamic_oracle_label)
                         list_mask_label[i].append(mask_label[i])
-            """
-            for i, l_score, mask in enumerate(zip(label_score, mask_label)):
-                if mask == 1:
-                    list_label_decision_score[i].append(l_score)
-
-                # For the dynamic oracle and the label. If the arc between the two words does not exist
-                # keep predicted label (since there is no good label)
-                if gold_config is not None:
-                    dynamic_oracle_label = self.dynamic_oracle.compute_label(
-                        config[i], gold_config[i], decision_taken[i]
-                    )
-                    # In the case where the arc does not exist, reinforce current predictions
-                    if dynamic_oracle_label == -1:
-                        dynamic_oracle_label = torch.argmax(l_score)
-
-                    dynamic_oracle_label_decision[i].append(dynamic_oracle_label)
-                    list_mask_label[i].append(mask_label[i])
-            """
             # batched update config for each decision now that all prediction has been done
-            parsed_tree = self._update_tree(
+            config = self._apply_decision(decision_taken, config)
+            parsed_tree = self._update_tree_v2(
                 decision_taken, label_score, config, parsed_tree, mask_label
             )
-            config = self._apply_decision(decision_taken, config)
             step_seq += 1
 
         list_decision_score = [torch.stack(x) for x in list_decision_score]
         list_decision_taken = [torch.stack(x) for x in list_decision_taken]
         list_label_decision_score = [torch.stack(x) for x in list_label_decision_score]
-        oracle_label_len = [len(d) for d in dynamic_oracle_label_decision]
+        oracle_label_len = torch.tensor([len(d) for d in dynamic_oracle_label_decision])
         dynamic_oracle_label_decision = [
             torch.tensor(d) for d in dynamic_oracle_label_decision
         ]
@@ -185,23 +174,29 @@ class TransitionBasedParser:
                 for i in range(len(oracle_len))
             ]
         )
+
         return {
             "parse_log_prob": torch.stack(list_decision_score).to(self.device),
             "decision_taken": torch.stack(list_decision_taken),
-            "oracle_parsing": torch.tensor(oracle_decision).to(self.device),
+            "oracle_parsing": oracle_decision.to(self.device),
             "label_log_prob": torch.nn.utils.rnn.pad_sequence(
-                list_label_decision_score, batch_first=True
+                list_label_decision_score,
+                batch_first=True,
             ).to(self.device),
             "oracle_label": torch.nn.utils.rnn.pad_sequence(
-                dynamic_oracle_label_decision, batch_first=True, padding_value=-1
+                dynamic_oracle_label_decision,
+                batch_first=True,
+                padding_value=self.oracle_padding_value,
             ).to(self.device),
             "mask_label": torch.nn.utils.rnn.pad_sequence(
                 list_mask_label, batch_first=True, padding_value=-1
             ).to(self.device)
             == 1,
             "parsed_tree": parsed_tree,
-            "oracle_parse_len": oracle_len.to(self.device),
-            "oracle_label_len": torch.tensor(oracle_label_len).to(self.device),
+            "oracle_parse_len": (oracle_len / torch.max(oracle_len)).to(self.device),
+            "oracle_label_len": (oracle_label_len / torch.max(oracle_label_len)).to(
+                self.device
+            ),
         }
 
     def _decision_score(self, x: torch.Tensor) -> torch.Tensor:
@@ -228,8 +223,24 @@ class TransitionBasedParser:
         for i, d in enumerate(decision_taken):
             last_key = self.transition.update_tree(d, config[i], parsed_tree[i])
             if mask_label[i] == 1:
-                # does not work cause ordered
                 parsed_tree[i][last_key]["label"] = torch.argmax(label_score[i]).item()
+        return parsed_tree
+
+    def _update_tree_v2(
+        self,
+        decision_taken: List[int],
+        label_score: torch.Tensor,
+        config: Configuration,
+        parsed_tree: List[dict],
+        mask_label: List[int],
+    ) -> List[dict]:
+        for i, d in enumerate(decision_taken):
+            if mask_label[i] == 1:
+                # take the last arc
+                arc = config[i].arc[-1]
+                key = arc.dependent.position
+                parsed_tree[i][key] = {"head": arc.head.position}
+                parsed_tree[i][key]["label"] = torch.argmax(label_score[i]).item()
         return parsed_tree
 
     def _get_oracle_move_from_config_tree(
@@ -325,6 +336,5 @@ class TransitionBasedParser:
         batch_rep = self.label_policie.compute_representation_batch(
             config, decision, self.transition
         )
-        print(batch_rep.shape)
         label_score = self.label_neural_network(batch_rep)
         return label_score, mask
