@@ -1,10 +1,15 @@
 from typing import List
-from .reader import Reader
+from parsebrain.processing.dependency_parsing.sequence_labeling.alignment_oracle.reader import (
+    Reader,
+)
+
+# todo : make this independent from RELPOS (remove the "-1@INSERTION", cleanly)
+# Moreover, this is tailored for case where there is three task, need to make it more agile.
 
 
 class ReaderSpeechbrain(Reader):
     def read(
-        self, alignment, original_gov: List, original_dep: List, original_pos: List
+        self, alignment: str, original_gov: List, original_dep: List, original_pos: List
     ):
         """
         Return the corresponding annotation based on the current alignment (ie if a word was added, add anotation too so
@@ -19,12 +24,8 @@ class ReaderSpeechbrain(Reader):
         >>> og_dep = [[1,2,3,4], [4,5,6]]
         >>> og_pos = [[1,2,3,4], [4,5,6]]
         >>> reader = ReaderSpeechbrain()
-        >>> alphabet =[{'-1@INSERTION': 0}, {'INSERTION':0}, {'INSERTION':0}]
-        >>> reverse = [{v : k for k, v in alphabet[0].items()},
-        ...            {v : k for k, v in alphabet[1].items()},
-        ...            {v : k for k, v in alphabet[2].items()}]
-        >>> reader.set_alphabet(alphabet, reverse)
         >>> reader.read(wer_alig, og_gov, og_dep, og_pos)
+        ([['C', 'D', 'C', 'S'], ['C', 'C', 'I', 'C', 'I']], [[1, 2, 3, 4], [4, 5, 'INSERTION', 6, 'INSERTION']], [[1, 2, 3, 4], [4, 5, 'INSERTION', 6, 'INSERTION']], [[1, 2, 3, 4], [4, 5, 'INSERTION', 6, 'INSERTION']])
         """
         govs = []
         deps = []
@@ -40,9 +41,9 @@ class ReaderSpeechbrain(Reader):
             for a in alig:
                 gold_index = a[1]
                 if a[0] == "I":
-                    tmp_gov.append(self.alphabet[0]["-1@INSERTION"])
-                    tmp_dep.append(self.alphabet[1]["INSERTION"])
-                    tmp_pos.append(self.alphabet[2]["INSERTION"])
+                    tmp_gov.append("INSERTION")
+                    tmp_dep.append("INSERTION")
+                    tmp_pos.append("INSERTION")
                     tmp_type.append("I")
                 else:
                     tmp_gov.append(gov[gold_index])

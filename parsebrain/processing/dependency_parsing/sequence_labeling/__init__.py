@@ -1,2 +1,2 @@
 from . import encoding
-from . import oracle
+from . import alignment_oracle

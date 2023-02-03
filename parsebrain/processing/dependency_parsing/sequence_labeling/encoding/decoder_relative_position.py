@@ -62,7 +62,7 @@ class DecoderRelPos(Decoder):
         ):  # for each element of the batch
             to_decode = {0: ["-BOS-", "-BOS-", "-BOS-", "-BOS-", "-BOS-"]}
             # for each element of seqlen
-            print(f"{sent_id} \t {predicted_words} \t {p_govLabel.shape}")
+            #print(f"{sent_id} \t {words} \t {p_govLabel.shape}")
             for i, (p_dep, p_gov, p_pos, word) in enumerate(
                 zip(p_deps, p_govs, p_poss, words)
             ):

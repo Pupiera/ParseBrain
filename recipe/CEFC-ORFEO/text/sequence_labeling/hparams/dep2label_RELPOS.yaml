@@ -72,6 +72,10 @@ model_opt_class: !name:torch.optim.Adadelta
   rho: 0.95
   eps: 1.e-8
 
+# feature extractor
+features_extractor: !new:parsebrain.hugging_face_text.LastSubWordEmbedding
+
+
 #
 # Functions and classes
 #

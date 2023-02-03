@@ -4,6 +4,7 @@ import wandb
 import speechbrain as sb
 from hyperpyyaml import load_hyperpyyaml
 from speechbrain.utils.distributed import run_on_main
+from transformers import CamembertModel, CamembertTokenizerFast
 
 import parsebrain as pb
 import torch
@@ -11,10 +12,97 @@ import torch
 
 class Parser(sb.core.Brain):
     def compute_forward(self, batch, stage):
-        pass
+        tokens = batch.tokens.data
+        tokens = tokens.to(self.device)
+        tokens_conllu = batch.tokens_conllu.data.to(self.device)
+        features = self.hparams.features_extractor.extract_features(
+            tokens, tokens_conllu
+        )
+        batch_len = features.shape[0]
+        seq_len = torch.tensor([len(w) for w in batch.words]).to(self.device)
+        hidden = torch.zeros(4, batch_len, 800, device=self.device)
+        cell = torch.zeros(4, batch_len, 800, device=self.device)
+        lstm_out, _ = self.modules.dep2LabelFeat(features, (hidden, cell))
+        logits_posLabel = self.modules.posDep2Label(lstm_out)
+        p_posLabel = self.hparams.log_softmax(logits_posLabel)
+        logits_depLabel = self.modules.depDep2Label(lstm_out)
+        p_depLabel = self.hparams.log_softmax(logits_depLabel)
+        logits_govLabel = self.modules.govDep2Label(lstm_out)
+        p_govLabel = self.hparams.log_softmax(logits_govLabel)
+        result = {
+            "p_posLabel": p_posLabel,
+            "p_depLabel": p_depLabel,
+            "p_govLabel": p_govLabel,
+            "seq_len": seq_len,
+        }
+        return result
 
     def compute_objectives(self, predictions, batch, stage):
-        pass
+        allowed = 0
+        loss_depLabel = self.hparams.depLabel_cost(
+            predictions["p_depLabel"],
+            batch.dep_tokens,
+            length=predictions["seq_len"],
+            allowed_len_diff=allowed,
+        )
+        loss_govLabel = self.hparams.govLabel_cost(
+            predictions["p_govLabel"],
+            batch.head,
+            length=predictions["seq_len"],
+            allowed_len_diff=allowed,
+        )
+        loss_POS = self.hparams.posLabel_cost(
+            predictions["p_posLabel"],
+            batch.pos_tokens,
+            length=predictions["seq_len"],
+            allowed_len_diff=allowed,
+        )
+        return 0.3 * loss_POS + 0.4 * loss_govLabel + 0.3 * loss_depLabel
+
+    def on_stage_end(self, stage, stage_loss, epoch):
+        stage_stats = {"loss": stage_loss}
+        if stage == sb.Stage.TRAIN:
+            self.train_stats = stage_stats
+        else:
+            if stage == sb.Stage.VALID:
+                st = self.hparams.dev_output_conllu
+                goldPath_CoNLLU = self.hparams.dev_gold_conllu
+                alig_file = self.hparams.alig_path + "_valid"
+                order = self.dev_order
+            else:
+                st = self.hparams.test_output_conllu
+                goldPath_CoNLLU = self.hparams.test_gold_conllu
+                alig_file = self.hparams.alig_path + "_test"
+                order = self.test_order
+            self.hparams.evaluator.writeToCoNLLU(st, order)
+            metrics_dict = self.hparams.evaluator.evaluateCoNLLU(
+                goldPath_CoNLLU, st, alig_file
+            )
+            stage_stats["LAS"] = metrics_dict["LAS"].f1 * 100
+            stage_stats["UAS"] = metrics_dict["UAS"].f1 * 100
+            stage_stats["UPOS"] = metrics_dict["UPOS"].f1 * 100
+        if stage == sb.Stage.VALID:
+            old_lr_model, new_lr_model = self.hparams.lr_annealing_model(
+                stage_stats["loss"]
+            )
+            sb.nnet.schedulers.update_learning_rate(self.model_optimizer, new_lr_model)
+            self.hparams.train_logger.log_stats(
+                stats_meta={
+                    "epoch": epoch,
+                    "lr_model": old_lr_model,
+                },
+                train_stats=self.train_stats,
+                valid_stats=stage_stats,
+            )
+            wandb_stats = {"epoch": epoch}
+            wandb_stats = {**wandb_stats, **stage_stats}  # fuse dict
+            wandb.log(wandb_stats)
+            self.checkpointer.save_and_keep_only(
+                meta={
+                    "LAS": stage_stats["LAS"],
+                },
+                max_keys=["LAS"],
+            )
 
 
 def dataio_prepare(hparams, tokenizer):
@@ -81,19 +169,51 @@ def dataio_prepare(hparams, tokenizer):
 
     sb.dataio.dataset.add_dynamic_item(datasets, text_pipeline)
 
-    @sb.utils.data_pipeline.takes("POS", "HEAD", "DEP")
+    @sb.utils.data_pipeline.takes("wrd", "POS", "HEAD", "DEP")
     @sb.utils.data_pipeline.provides("pos_tokens", "head", "dep_tokens")
-    def syntax_pipeline(pos, head, dep):
+    def syntax_pipeline(wrd, pos, head, dep):
         """
         compute gold configuration here
         """
-        pos_tokens = pos
-        yield pos_tokens
-        yield head
-        dep_token = [dep_label_dict.get(d) for d in dep]
-        yield dep_token
-        # gold_config = GoldConfiguration(HEAD)
-        # yield gold_config
+        try:
+            pos_list = torch.LongTensor(
+                [label_alphabet[2].get(p) for p in pos.split(" ")]
+            )
+        except TypeError:
+            print(wrd)
+            print(poss)
+            print([label_alphabet[2].get(p) for p in pos.split(" ")])
+        yield pos_list
+        fullLabel = encoding.encodeFromList(
+            [w for w in wrd.split(" ")],
+            [p for p in pos.split(" ")],
+            [g for g in head.split(" ")],
+            [d for d in dep.split(" ")],
+        )
+        # first task is gov pos and relative position
+        try:
+            govDep2label = torch.LongTensor(
+                [
+                    label_alphabet[0].get(fl.split("\t")[-1].split("{}")[0])
+                    for fl in fullLabel
+                ]
+            )
+            yield govDep2label
+        except TypeError as e:
+            print(wrd)
+            print([fl.split("\t")[-1].split("{}")[0] for fl in fullLabel])
+            print(
+                [
+                    label_alphabet[0].get(fl.split("\t")[-1].split("{}")[0])
+                    for fl in fullLabel
+                ]
+            )
+            raise TypeError() from e
+        # second task is dependency type
+        depDep2Label = torch.LongTensor(
+            [label_alphabet[1].get(fl.split("{}")[1]) for fl in fullLabel]
+        )
+        yield depDep2Label
 
     sb.dataio.dataset.add_dynamic_item(datasets, syntax_pipeline)
 
@@ -116,8 +236,66 @@ def dataio_prepare(hparams, tokenizer):
     return train_data, valid_data, test_data
 
 
+def build_label_alphabet(path_encoded_train):
+    label_gov = dict()
+    label_dep = dict()
+    label_pos = dict()
+    with open(path_encoded_train, "r", encoding="utf-8") as inputFile:
+        for line in inputFile:
+            field = line.split("\t")
+            if len(field) > 1:
+                fullLabel = field[-1]
+                labelSplit = fullLabel.split("{}")
+                govLabel = labelSplit[0]
+                if govLabel not in label_gov:
+                    label_gov[govLabel] = len(label_gov)
+                depLabel = labelSplit[-1].replace("\n", "")
+                if depLabel not in label_dep:
+                    label_dep[depLabel] = len(label_dep)
+                pos = field[1]
+                if pos not in label_pos:
+                    label_pos[pos] = len(label_pos)
+    for pos_key in label_pos:
+        for i in range(1, 20):
+            key = f"{i}@{pos_key}"
+            if "+" + key not in label_gov.keys():
+                label_gov["+" + key] = len(label_gov)
+            if "-" + key not in label_gov.keys():
+                label_gov["-" + key] = len(label_gov)
+    label_gov["-1@INSERTION"] = len(label_gov)
+    label_gov["-1@DELETION"] = len(label_gov)
+    label_dep["INSERTION"] = len(label_dep)
+    label_dep["DELETION"] = len(label_dep)
+    label_pos["INSERTION"] = len(label_pos)
+    return [label_gov, label_dep, label_pos]
+
+
+def get_id_from_CoNLLfile(path):
+    """
+    Get the sentence id from the conll file in the order
+    Will be used to write in the same order for comparaison sakes.
+    """
+    sent_id = []
+    with open(path, "r", encoding="utf-8") as fin:
+        for line in fin:
+            if line.startswith("# sent_id"):
+                field = line.split("=")
+                sent_id.append(field[1].replace(" ", "").replace("\n", ""))
+    return sent_id
+
+
+def build_reverse_alphabet(alphabet):
+    reverse = []
+    for alpha in alphabet:
+        reverse.append({item: key for (key, item) in alpha.items()})
+    return reverse
+
+
 def main():
     wandb.init()
+    path_encoded_train = "all.seq"  # For alphabet generation
+    label_alphabet = build_label_alphabet(path_encoded_train)
+    reverse_label_alphabet = build_reverse_alphabet(label_alphabet)
     # Load hyperparameters file with command-line overrides
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
     with open(hparams_file) as fin:
@@ -133,10 +311,8 @@ def main():
         hyperparams_to_save=hparams_file,
         overrides=overrides,
     )
-    run_on_main(hparams["pretrainer"].collect_files)
-    hparams["pretrainer"].load_collected(device=run_opts["device"])
-
-    tokenizer = hparams["tokenizer"]
+    tokenizer = CamembertTokenizerFast.from_pretrained("camembert-base")
+    camembert = CamembertModel.from_pretrained("camembert-base").to(run_opts["device"])
 
     # Create the datasets objects as well as tokenization and encoding :-D
     train_data, valid_data, test_data = dataio_prepare(hparams, tokenizer)
@@ -147,6 +323,8 @@ def main():
         run_opts=run_opts,
         checkpointer=hparams["checkpointer"],
     )
+    brain.hparams.features_extractor.set_model(camembert)
+    brain.tokenizer = tokenizer
     brain.data_valid = []
     brain.fit(
         brain.hparams.epoch_counter,

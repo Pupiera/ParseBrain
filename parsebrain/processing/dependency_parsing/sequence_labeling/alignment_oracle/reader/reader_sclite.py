@@ -30,9 +30,9 @@ class ReaderSclite(Reader):
                     pos.append(original_pos[index_sent][index_gold])
                     index_gold += 1
                 elif fields[0] == "I":  # insertion. Only present in predictions
-                    gov.append(self.alphabet[0].get("-1@INSERTION"))
-                    dep.append(self.alphabet[1].get("INSERTION"))
-                    pos.append(self.alphabet[2].get("INSERTION"))
+                    gov.append("-1@INSERTION")
+                    dep.append("INSERTION")
+                    pos.append("INSERTION")
                 else:  # Correct or substitution
                     gov.append(original_gov[index_sent][index_gold])
                     dep.append(original_dep[index_sent][index_gold])

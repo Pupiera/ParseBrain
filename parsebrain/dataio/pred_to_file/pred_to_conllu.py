@@ -13,17 +13,28 @@ label = [
 ]
 
 
-def write_token_dict_conllu(data, file):
+def write_token_dict_conllu(data, file, order=None):
     """
     Write a dict into a file in the conllu format
 
-    >>> data_ = [{"sent_id": "test1", "sentence" : [{"ID": 1, "FORM": "XXX","UPOS": "YYY", "HEAD":2, "DEPREL" :"deps"},
+    >>> data_ = { "test1" : {"sent_id": "test1", "sentence" : [{"ID": 1, "FORM": "XXX","UPOS": "YYY", "HEAD":2, "DEPREL" :"deps"},
     ...                                            {"ID": 2, "FORM": "XYY", "UPOS": "YXX", "HEAD":0, "DEPREL" :"root"}]},
-    ...            {"sent_id": "test2", "sentence" : [{"ID": 1, "FORM": "XXX","UPOS": "YYY", "HEAD":2, "DEPREL" :"deps"},
-    ...                                          {"ID": 2, "FORM": "XYY", "UPOS": "YXX", "HEAD":0, "DEPREL" :"root"}]}]
+    ...           "test2" : {"sent_id": "test2", "sentence" : [{"ID": 1, "FORM": "XXX","UPOS": "YYY", "HEAD":2, "DEPREL" :"deps"},
+    ...                                          {"ID": 2, "FORM": "XYY", "UPOS": "YXX", "HEAD":0, "DEPREL" :"root"}]}}
     >>> with open("test_write.conllu","w",encoding="utf-8") as tmp_file:
     ...     write_token_dict_conllu(data_, tmp_file)
     """
+    if order is not None:
+        new_data = []
+        for o in order:
+            new_data.append(data[o])
+        data = new_data
+    else:
+        new_data = []
+        for k, d in data.items():
+            new_data.append(d)
+        data = new_data
+
     for d in data:
         sent = ""
         if "sent_id" in d:

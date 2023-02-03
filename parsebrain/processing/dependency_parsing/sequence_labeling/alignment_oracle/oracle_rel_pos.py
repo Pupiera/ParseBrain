@@ -1,9 +1,9 @@
 from typing import List
 
-from parsebrain.processing.dependency_parsing.sequence_labeling.oracle.reader import (
+from parsebrain.processing.dependency_parsing.sequence_labeling.alignment_oracle.reader import (
     Reader,
 )
-from parsebrain.processing.dependency_parsing.sequence_labeling.oracle.oracle import (
+from parsebrain.processing.dependency_parsing.sequence_labeling.alignment_oracle.oracle import (
     Oracle,
 )
 import torch
@@ -13,12 +13,26 @@ class OracleRelPos(Oracle):
     def __init__(self, reader_alig: Reader):
         super().__init__(reader_alig)
 
+    def read_alignment(
+        self, alignment: str, original_gov: List, original_dep: List, original_pos: List
+    ):
+        types, govs, deps, poss = self.reader_alig.read(
+            alignment, original_gov, original_dep, original_pos
+        )
+        for y, typ in enumerate(types):
+            for i, t in enumerate(typ):
+                if "I" in t:
+                    govs[y][i] = self.alphabet[0]["-1@INSERTION"]
+                    deps[y][i] = self.alphabet[1]["INSERTION"]
+                    poss[y][i] = self.alphabet[2]["INSERTION"]
+        return types, govs, deps, poss
+
     def find_best_tree_from_alignment(
         self,
         alignment,
-        dep2label_gov: List,
-        dep2label_dep: List = None,
-        gold_pos: List = None,
+        original_gov: List,
+        original_dep: List = None,
+        original_pos: List = None,
     ):
 
         new_gold_gov = []
@@ -26,8 +40,8 @@ class OracleRelPos(Oracle):
         new_gold_POS = []
 
         # Replace this by dict ?
-        types, govs, deps, poss = self.reader_alig.read(
-            alignment, dep2label_gov, dep2label_dep, gold_pos
+        types, govs, deps, poss = self.read_alignment(
+            alignment, original_gov, original_dep, original_pos
         )
 
         for typ, gov, dep, pos in zip(types, govs, deps, poss):  # for each sentence
@@ -50,8 +64,6 @@ class OracleRelPos(Oracle):
                     p = p.item()
                 except AttributeError:  # not tensor
                     pass
-                if g == 0:
-                    print(alignment)
                 if (
                     t == "D"
                 ):  # Deleted tokens do not appears in the new best dependency tree
@@ -65,7 +77,6 @@ class OracleRelPos(Oracle):
                     new_pos.append(p)
                     dist_from_root.append(999999)
                     continue
-                # to do : debug this. behavior should be : if parent is deleted, attach to parent parent recursively.
                 # while p_t == 'D' or not p_gov == "-1@ROOT": # while parent is deleted and current gov is not root
                 if g == self.alphabet[0]["-1@ROOT"]:
                     has_root = True
