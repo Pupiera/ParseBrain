@@ -53,10 +53,8 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         for i, b in enumerate(buffer_list):
             if len(b) > 0:
                 emb_buffer[i, 0 : b.shape[0], :] = b
-        return torch.cat(
-            (emb_buffer.reshape(batch_size, -1), emb_stack.reshape(batch_size, -1)),
-            dim=1,
-        )
+        result = torch.cat((emb_buffer, emb_stack), dim=1)
+        return result.reshape(batch_size, -1)
 
 
 class ConfigurationFeaturesComputerConcatRNN(ConfigurationFeaturesComputerConcat):
@@ -84,20 +82,23 @@ class ConfigurationFeaturesComputerConcatRNN(ConfigurationFeaturesComputerConcat
                  [13, 14, 15],
                  [16, 17, 18]]])
         """
+        batch_size = len(stack)
         stack_depth = self.stack_depth
         tmp_stack = []
         for x in stack:
             try:
-                tmp_stack.append(torch.stack(x[-stack_depth:]))
+                x = torch.stack(x[-stack_depth:])
+                tmp_stack.append(torch.reshape(x, (stack_depth, self.dim)))
             except RuntimeError:
                 # x[-stack_depth:] empty
-                tmp_stack.append(torch.zeros(size=(1, self.dim)).to(device))
-
+                tmp_stack.append(torch.zeros(size=(stack_depth, self.dim)).to(device))
         emb_stack = torch.nn.utils.rnn.pad_sequence(
             tmp_stack,
             batch_first=True,
             padding_value=0.0,
         ).to(device)
+        emb_stack = torch.reshape(emb_stack, (batch_size, stack_depth, self.dim))
+        # emb_stack = torch.reshape(emb_stack, )
         # if need to be able to take multiple element of buffer, update this. (remove unsqueeze and edit x[0])
         tmp_buffer = []
         for x in buffer:

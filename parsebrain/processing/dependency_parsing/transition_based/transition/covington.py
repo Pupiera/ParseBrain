@@ -1,25 +1,31 @@
 import torch
 
-from processing.dependency_parsing.transition_based.configuration import Configuration
-from transition import Transition
+from parsebrain.processing.dependency_parsing.transition_based.configuration import (
+    Configuration,
+)
+from parsebrain.processing.dependency_parsing.transition_based.transition import (
+    Transition,
+)
 from tarjan import tarjan
-from arc import LeftArc, RightArc
+from .arc import LeftArc, RightArc
 
 
 class CovingtonTransition(Transition):
+    SHIFT = 0
+    LEFT = 1
+    RIGHT = 2
+    NO_ARC = 3
+
     def __init__(self):
         super().__init__()
-        self.SHIFT = 0
-        self.LEFT = 1
-        self.RIGHT = 2
-        self.NO_ARC = 3
 
-    def get_transition_dict(self) -> dict:
+    @classmethod
+    def get_transition_dict(cls) -> dict:
         return {
-            "SHIFT": self.SHIFT,
-            "NO_ARC": self.NO_ARC,
-            "LEFT": self.LEFT,
-            "RIGHT": self.RIGHT,
+            "SHIFT": cls.SHIFT,
+            "NO_ARC": cls.NO_ARC,
+            "LEFT": cls.LEFT,
+            "RIGHT": cls.RIGHT,
         }
 
     def get_relation_from_decision(
@@ -30,6 +36,7 @@ class CovingtonTransition(Transition):
     def is_decision_valid(self, decision: int, config: Configuration) -> bool:
         if self.is_terminal(config):
             return False
+
         if decision == self.SHIFT:
             return self.shift_condition(config)
         elif decision == self.NO_ARC:
@@ -46,6 +53,7 @@ class CovingtonTransition(Transition):
     def apply_decision(self, decision: int, config: Configuration) -> Configuration:
         if self.is_terminal(config):
             return config
+
         if decision == self.SHIFT:
             return self.shift(config)
         elif decision == self.NO_ARC:
@@ -59,7 +67,8 @@ class CovingtonTransition(Transition):
                 f"Decision number ({decision}) is out of scope for covington transition"
             )
 
-    def is_terminal(self, config: Configuration) -> bool:
+    @staticmethod
+    def is_terminal(config: Configuration) -> bool:
         return len(config.buffer_string) == 0
 
     def update_tree(self, decision: int, config: Configuration, tree: dict) -> dict:
@@ -111,9 +120,12 @@ class CovingtonTransition(Transition):
         @param config:
         @return:
         """
-
-        wi_string = config.stack_string[-1]
-        wj_string = config.buffer_string
+        try:
+            # can't be the root here, since it mean the root would be a dependent
+            wi_string = config.stack_string[-1]
+            wj_string = config.buffer_string[0]
+        except IndexError:
+            return False
         # single head and acyclicity check
         if CovingtonTransition.has_head(
             wi_string, config.arc
@@ -126,7 +138,7 @@ class CovingtonTransition(Transition):
     @staticmethod
     def cycle_check(head, dependent, arcs):
         """
-
+        return true if adding this arc would create a cycle.
         @param head:
         @param dependent:
         @param arcs:
@@ -136,15 +148,16 @@ class CovingtonTransition(Transition):
         >>> conf = CovingtonTransition.shift(conf)
         >>> conf = CovingtonTransition.left_arc(conf)
         >>> conf = CovingtonTransition.shift(conf)
-        >>> CovingtonTransition.cycle_check(2,1, conf.arc)
+        >>> CovingtonTransition.cycle_check(conf.buffer_string[0], conf.stack_string[-1], conf.arc)
         False
         >>> conf = CovingtonTransition.left_arc(conf)
-        >>> CovingtonTransition.cycle_check(1,3, conf.arc)
+        >>>conf.stack_string, conf.buffer_string
+        >>> CovingtonTransition.cycle_check(conf.buffer_string[0],conf.stack_string[-1], conf.arc)
         True
         """
         # no cycle possible, so should be 0 before adding the potential arcs
         A = set([(a.head.position, a.dependent.position) for a in arcs])
-        A.add((head, dependent))
+        A.add((head.position, dependent.position))
         d = {}
         for a, b in A:
             if a not in d:
@@ -190,8 +203,16 @@ class CovingtonTransition(Transition):
         @param config:
         @return:
         """
-        wi_string = config.stack_string[-1]
-        wj_string = config.buffer_string[0]
+        if len(config.stack_string) > 0:
+            wi_string = config.stack_string[-1]
+        elif not config.has_root:
+            wi_string = config.root_token
+        else:
+            return False
+        try:
+            wj_string = config.buffer_string[0]
+        except IndexError:
+            return False
         # single head and acyclicity check
         if CovingtonTransition.has_head(
             wj_string, config.arc
@@ -215,11 +236,26 @@ class CovingtonTransition(Transition):
         >>> conf.stack, conf.stack_string, conf.stack2, conf.stack2_string, conf.buffer, conf.buffer_string, str(conf.arc[0])
         ([], [], ['Hey'], ['Hey'], ['Parsing', 'Is', 'Fun'], ['Parsing', 'Is', 'Fun'], 'arc : Hey -> Parsing')
         """
-        wj = config.buffer[0]
         wj_string = config.buffer_string[0]
+        try:
+            wj = config.buffer[0]
+        except IndexError as e:
+            print(config.buffer_string)
+            print(len(config.buffer))
+            raise e
 
-        wi = config.stack.pop()
-        wi_string = config.stack_string.pop()
+        if len(config.stack_string) > 0:
+            wi = config.stack.pop()
+            wi_string = config.stack_string.pop()
+        elif not config.has_root:
+            # dont append root to the stack (disable multiple root)
+            wi = config.root
+            wi_string = config.root_token
+            config.arc.append(RightArc(head=wi_string, dependent=wj_string))
+            config.has_root = True
+            return config
+        else:
+            raise IndexError("no element in stack and root already chosen.")
 
         config.stack2.insert(0, wi)
         config.stack2_string.insert(0, wi_string)
@@ -229,7 +265,7 @@ class CovingtonTransition(Transition):
 
     @staticmethod
     def no_arc_condition(config):
-        return len(config.stack) >= 1
+        return len(config.stack_string) >= 1
 
     @staticmethod
     def no_arc(config):

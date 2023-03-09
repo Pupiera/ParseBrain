@@ -13,7 +13,7 @@ Need to think how to cleanly deal
 """
 
 
-# Dynamic oracle from "A Dynamic Oracle for Arc-Eager Dependency Parsing" Goldberg, Yoav, and Joakim Nivre
+# Dynamic alignment_oracle from "A Dynamic Oracle for Arc-Eager Dependency Parsing" Goldberg, Yoav, and Joakim Nivre
 
 # Maybe need to rework the actions the parser can take in a specific config. ( to not have multiple implementation of
 # those rules)
@@ -24,7 +24,7 @@ class DynamicOracleArcEager(DynamicOracle):
         self, configuration: Configuration, gold_configuration: GoldConfiguration
     ) -> int:
         """
-        Compute the next oracle move from current configuration and the gold configuration
+        Compute the next alignment_oracle move from current configuration and the gold configuration
 
         >>> from parsebrain.processing.dependency_parsing.transition_based.configuration import Configuration
         >>> from parsebrain.processing.dependency_parsing.transition_based.transition import ArcEagerTransition
@@ -38,14 +38,14 @@ class DynamicOracleArcEager(DynamicOracle):
         >>> for i, h in enumerate(heads): config_gold.heads[i+1] = h
         >>> deps = [[], [], [2], [], [1,3,4,6,7], [], [11], [9], [10], [], [8]]
         >>> for i, d in enumerate(deps): config_gold.deps[i+1] = d
-        >>> oracle = DynamicOracleArcEager()
-        >>> m = oracle.get_oracle_move_from_config_tree(config, config_gold)
+        >>> alignment_oracle = DynamicOracleArcEager()
+        >>> m = alignment_oracle.get_oracle_move_from_config_tree(config, config_gold)
         >>> print(m)
         0
         >>> transiton = ArcEagerTransition()
         >>> list_decision = []
         >>> while len(config.buffer) != 0:
-        ...     decision = oracle.get_oracle_move_from_config_tree(config, config_gold)
+        ...     decision = alignment_oracle.get_oracle_move_from_config_tree(config, config_gold)
         ...     list_decision.append(decision)
         ...     config = transiton.apply_decision(decision, config)
         >>> print(list_decision)
@@ -55,7 +55,7 @@ class DynamicOracleArcEager(DynamicOracle):
         """
         # print(f"{[str(w) for w in configuration.buffer_string]}")
         if len(configuration.buffer) == 0:  # if config is terminal with Arc eager:
-            return self.oracle_padding_value  # padding
+            return self.padding_value  # padding
         decision_cost = [
             self.compute_shift_cost(configuration, gold_configuration)
             + int(not ArcEagerTransition.shift_condition(configuration)) * 99999,
@@ -90,14 +90,14 @@ class DynamicOracleArcEager(DynamicOracle):
         >>> for i, h in enumerate(heads): config_gold.heads[i+1] = h
         >>> deps = [[], [], [2], [], [1,3,4,6,7], [], [11], [9], [10], [], [8]]
         >>> for i, d in enumerate(deps): config_gold.deps[i+1] = d
-        >>> oracle = DynamicOracleArcEager()
-        >>> c = oracle.compute_shift_cost(config, config_gold)
+        >>> alignment_oracle = DynamicOracleArcEager()
+        >>> c = alignment_oracle.compute_shift_cost(config, config_gold)
         >>> print(c)
         0
         >>> transition = ArcEagerTransition()
         >>> config = transition.shift(config)
         >>> config = transition.shift(config)
-        >>> c = oracle.compute_shift_cost(config, config_gold)
+        >>> c = alignment_oracle.compute_shift_cost(config, config_gold)
         >>> print(c)
         1
         >>>
@@ -138,20 +138,20 @@ class DynamicOracleArcEager(DynamicOracle):
         >>> for i, h in enumerate(heads): config_gold.heads[i+1] = h
         >>> deps = [[], [], [2], [], [1,3,4,6,7], [], [11], [9], [10], [], [8]]
         >>> for i, d in enumerate(deps): config_gold.deps[i+1] = d
-        >>> oracle = DynamicOracleArcEager()
-        >>> c = oracle.compute_reduce_cost(config, config_gold)
+        >>> alignment_oracle = DynamicOracleArcEager()
+        >>> c = alignment_oracle.compute_reduce_cost(config, config_gold)
         >>> print(c)
         99999
         >>> transition = ArcEagerTransition()
         >>> config = transition.shift(config)
-        >>> c = oracle.compute_reduce_cost(config, config_gold)
+        >>> c = alignment_oracle.compute_reduce_cost(config, config_gold)
         >>> print(c)
         0
         >>> config = transition.shift(config)
         >>> config = transition.shift(config)
         >>> config = transition.shift(config)
         >>> config = transition.shift(config)
-        >>> c = oracle.compute_reduce_cost(config, config_gold)
+        >>> c = alignment_oracle.compute_reduce_cost(config, config_gold)
         >>> print(c)
         2
         >>>
@@ -189,18 +189,18 @@ class DynamicOracleArcEager(DynamicOracle):
         >>> for i, h in enumerate(heads): config_gold.heads[i+1] = h
         >>> deps = [[], [], [2], [], [1, 3, 4, 6, 7], [], [11], [9], [10], [], [8]]
         >>> for i, d in enumerate(deps): config_gold.deps[i+1] = d
-        >>> oracle = DynamicOracleArcEager()
-        >>> c = oracle.compute_left_arc_cost(config, config_gold)
+        >>> alignment_oracle = DynamicOracleArcEager()
+        >>> c = alignment_oracle.compute_left_arc_cost(config, config_gold)
         >>> print(c)
         99999
         >>> transition = ArcEagerTransition()
         >>> config = transition.shift(config)
-        >>> c = oracle.compute_left_arc_cost(config, config_gold)
+        >>> c = alignment_oracle.compute_left_arc_cost(config, config_gold)
         >>> print(c)
         1
         >>> config = transition.shift(config)
         >>> config = transition.shift(config)
-        >>> c = oracle.compute_left_arc_cost(config, config_gold)
+        >>> c = alignment_oracle.compute_left_arc_cost(config, config_gold)
         >>> print(c)
         2
 
@@ -251,14 +251,14 @@ class DynamicOracleArcEager(DynamicOracle):
         >>> for i, h in enumerate(heads): config_gold.heads[i+1] = h
         >>> deps = [[], [], [2], [], [1,3,4,6,7], [], [11], [9], [10], [], [8]]
         >>> for i, d in enumerate(deps): config_gold.deps[i+1] = d
-        >>> oracle = DynamicOracleArcEager()
+        >>> alignment_oracle = DynamicOracleArcEager()
         >>> transition = ArcEagerTransition()
         >>> config = transition.shift(config)
-        >>> c = oracle.compute_right_arc_cost(config, config_gold)
+        >>> c = alignment_oracle.compute_right_arc_cost(config, config_gold)
         >>> print(c)
         1
         >>> config = transition.shift(config)
-        >>> c = oracle.compute_right_arc_cost(config, config_gold)
+        >>> c = alignment_oracle.compute_right_arc_cost(config, config_gold)
         >>> print(c)
         2
         >>>

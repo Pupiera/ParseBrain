@@ -79,7 +79,7 @@ class ArcEagerTransition(Transition):
     def apply_decision(self, decision: int, config: Configuration) -> Configuration:
         """
         apply the given decision
-        In case where the state is terminal do nothing (Padding)
+        In case where the statie is terminal do nothing (Padding)
         """
         # todo: if nothing is valid, backup solution. (this means the parser did some very bad thing, such as only shifting)
         if self.is_terminal(config):
@@ -114,7 +114,8 @@ class ArcEagerTransition(Transition):
                 f"Decision {decision} out of scope for arc-eager transition"
             )
 
-    def is_terminal(self, config: Configuration) -> bool:
+    @staticmethod
+    def is_terminal(config: Configuration) -> bool:
         """
         Condition is terminal if buffer is empty
         (can't create any new arc if everything is on the stack)
@@ -122,6 +123,7 @@ class ArcEagerTransition(Transition):
         """
         return len(config.buffer_string) == 0
 
+    # maybe move this to config ?
     @staticmethod
     def has_head(wi: Word, arc: List[Arc]) -> bool:
         """
@@ -142,9 +144,14 @@ class ArcEagerTransition(Transition):
         Condition to fullfill for shift to be available
         :return:
         """
-        return len(config.buffer_string) > 1 or (
-            len(config.buffer_string) == 1 and len(config.stack_string) == 0
-        )
+        if len(config.buffer_string) >= 2:
+            return True
+        elif len(config.buffer_string) == 1 and (
+            ArcEagerTransition.has_head(config.buffer_string[0], config.arc)
+            or len(config.stack_string) == 0
+        ):
+            return True
+        return False
 
     @staticmethod
     def shift(config: Configuration) -> Configuration:
@@ -171,12 +178,21 @@ class ArcEagerTransition(Transition):
         # safeguard against reduce to remove case where we get a isolated word.
         # if len of stack and len of buffer is 1, can't reduce
         # unless the last element in buffer already has an head.
+        # or the root has yet to be chosen.
+        # No point in reducing to the root. If it already has an head then it is the root choosen with Right arc
+        # if no root then one will appear with left arc from the rest of the sentence and it will be poped naturally
+        # Note that this only work because arc eager deal only with projective sentence.
+        if len(config.stack_string) == 1:
+            return False
+        """
         if (
             len(config.stack_string) == 1
             and len(config.buffer_string) == 1
+            and config.has_root
             and not ArcEagerTransition.has_head(config.buffer_string[0], config.arc)
         ):
             return False
+        """
         try:
             wi = config.stack_string[-1]
         except IndexError:
@@ -214,10 +230,14 @@ class ArcEagerTransition(Transition):
         The stack need to be empty because the root is the first element in the stack (if there is element in the stack
         the root is not on top of the stack)
         """
+        if (len(config.stack_string) == 0 and config.has_root) or len(
+            config.buffer_string
+        ) == 0:
+            return False
         if (
             len(config.stack_string) > 0
             or (not config.has_root and len(config.stack_string) == 0)
-        ) and len(config.buffer_string) > 0:
+        ) and len(config.buffer_string) >= 1:
             return True
         return False
 
@@ -259,9 +279,12 @@ class ArcEagerTransition(Transition):
         # safeguard against isolated word in the end
         if len(config.stack_string) == 0 or len(config.buffer_string) == 0:
             return False
+        # if its the last element in the buffer has no head and there is only one element left in the stack and the root
+        # has already been chosen, then can't use the left arc (no word left in the stack to create an arc after...)
         if (
             len(config.stack_string) == 1
             and len(config.buffer_string) == 1
+            and config.has_root
             and not ArcEagerTransition.has_head(config.buffer_string[0], config.arc)
         ):
             return False
@@ -286,7 +309,6 @@ class ArcEagerTransition(Transition):
 
         wi = config.stack.pop()
         wi_string = config.stack_string.pop()
-        wj = config.buffer[0]
         wj_string = config.buffer_string[0]
         config.arc.append(LeftArc(head=wj_string, dependent=wi_string))
         return config
