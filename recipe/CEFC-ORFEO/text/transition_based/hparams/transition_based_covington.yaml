@@ -1,7 +1,7 @@
 # Seed needs to be set at top of yaml, before objects with parameters are made
 seed: 1235
 __set_seed: !!python/object/apply:torch.manual_seed [ !ref <seed> ]
-output_folder: !ref results/Orfeo_arc_eager/<seed>
+output_folder: !ref results/Orfeo_arc_Covington/<seed>
 wer_file: !ref <output_folder>/wer.txt
 save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
@@ -102,7 +102,7 @@ neural_network: !new:speechbrain.nnet.containers.Sequential
     bias: True
 
 number_transitions: 4
-transition: !new:parsebrain.processing.dependency_parsing.transition_based.transition.ArcEagerTransition
+transition: !new:parsebrain.processing.dependency_parsing.transition_based.transition.CovingtonTransition
 
 #
 # Label (LAS)
@@ -166,7 +166,7 @@ features_computer: !new:parsebrain.processing.dependency_parsing.transition_base
   dim: !ref <embedding_dim>
   embedding: !ref <special_embedding>
 
-dynamic_oracle: !new:parsebrain.processing.dependency_parsing.transition_based.dynamic_oracle.DynamicOracleArcEager
+dynamic_oracle: !new:parsebrain.processing.dependency_parsing.transition_based.dynamic_oracle.DynamicOracleCovington
 
 label_parser: !new:parsebrain.processing.dependency_parsing.transition_based.label.LabelPolicieEmbedding
 

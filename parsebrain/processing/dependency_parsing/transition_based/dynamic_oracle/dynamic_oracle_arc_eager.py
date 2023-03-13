@@ -6,7 +6,9 @@ from parsebrain.processing.dependency_parsing.transition_based.configuration imp
 from parsebrain.processing.dependency_parsing.transition_based.transition import (
     ArcEagerTransition,
 )
-from .dynamic_oracle import DynamicOracle
+from parsebrain.processing.dependency_parsing.transition_based.dynamic_oracle import (
+    DynamicOracle,
+)
 
 """
 Need to think how to cleanly deal 
@@ -54,7 +56,7 @@ class DynamicOracleArcEager(DynamicOracle):
 
         """
         # print(f"{[str(w) for w in configuration.buffer_string]}")
-        if len(configuration.buffer) == 0:  # if config is terminal with Arc eager:
+        if ArcEagerTransition.is_terminal(configuration):
             return self.padding_value  # padding
         decision_cost = [
             self.compute_shift_cost(configuration, gold_configuration)
@@ -109,6 +111,9 @@ class DynamicOracleArcEager(DynamicOracle):
             return 99999
         cost = 0
         b = configuration.buffer_string[0].position
+        # special case for root
+        if gold_configuration.heads[b] == 0:
+            cost += 1
         for s_e in configuration.stack_string:
             p = s_e.position
             if gold_configuration.heads[p] == b or (gold_configuration.heads[b] == p):
@@ -266,13 +271,16 @@ class DynamicOracleArcEager(DynamicOracle):
 
         """
 
-        if (
-            len(configuration.buffer_string) == 0
-            or len(configuration.stack_string) == 0
-        ):
+        if len(configuration.buffer_string) == 0:
+            return 99999
+        if len(configuration.stack_string) == 0 and configuration.has_root:
             return 99999
         cost = 0
         b = configuration.buffer_string[0].position
+        # Special case for root.
+        if len(configuration.stack_string) == 0 and gold_configuration.heads[b] == 0:
+            return 0
+
         for b_e in configuration.buffer_string:
             p = b_e.position
             if gold_configuration.heads[b] == p:
@@ -298,16 +306,19 @@ class DynamicOracleArcEager(DynamicOracle):
         decision: int,
     ):
         transition = ArcEagerTransition()
+        try:
+            buffer_pos = configuration.buffer_string[0].position
+        except IndexError:
+            return self.padding_value
+        # Only case where we do not need element on top of stack, ROOT.
+        if gold_configuration.heads[buffer_pos] == 0 and decision == transition.RIGHT:
+            return gold_configuration.label[buffer_pos]
         # get info of first element of stack
         try:
             stack_pos = configuration.stack_string[-1].position
         except IndexError:
             return self.padding_value
         # get info of first element of buffer
-        try:
-            buffer_pos = configuration.buffer_string[0].position
-        except IndexError:
-            return self.padding_value
         # if decision is right arc, stack elt is head
         if decision == transition.RIGHT:
             # Check if this arc exist in gold config

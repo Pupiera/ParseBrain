@@ -343,8 +343,9 @@ class TransitionBasedParser:
         :param config:
         :return:
         """
+        has_root = [c.has_root for c in config]
         return self.features_computer.compute_feature(
-            [x.stack for x in config], [x.buffer for x in config], self.device
+            [x.stack for x in config], [x.buffer for x in config], has_root, self.device
         )
 
     def _compute_features_2(self, x: torch.tensor) -> torch.tensor:

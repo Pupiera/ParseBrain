@@ -7,23 +7,24 @@ from parsebrain.processing.dependency_parsing.transition_based.configuration imp
     Word,
 )
 from .arc import Arc, RightArc, LeftArc
-from .transition import Transition
+from parsebrain.processing.dependency_parsing.transition_based.transition.transition import (
+    Transition,
+)
 
 
 class ArcEagerTransition(Transition):
-    def __init__(self):
-        super().__init__()
-        self.SHIFT = 0
-        self.LEFT = 1
-        self.RIGHT = 2
-        self.REDUCE = 3
+    SHIFT = 0
+    LEFT = 1
+    RIGHT = 2
+    REDUCE = 3
 
-    def get_transition_dict(self) -> dict:
+    @classmethod
+    def get_transition_dict(cls) -> dict:
         return {
-            "SHIFT": self.SHIFT,
-            "REDUCE": self.REDUCE,
-            "LEFT": self.LEFT,
-            "RIGHT": self.RIGHT,
+            "SHIFT": cls.SHIFT,
+            "REDUCE": cls.REDUCE,
+            "LEFT": cls.LEFT,
+            "RIGHT": cls.RIGHT,
         }
 
     # Some function may need to work on batch of tensor...
@@ -41,6 +42,8 @@ class ArcEagerTransition(Transition):
         """
         if len(config.stack) > 0:
             stack = config.stack[-1]
+        elif not config.has_root:
+            stack = config.root.squeeze()
         else:
             device = config.buffer[0].device
             stack = torch.zeros(config.buffer[0].size()).to(device)
@@ -76,23 +79,24 @@ class ArcEagerTransition(Transition):
             tree[key] = {"head": buffer_head.position}
         return key
 
-    def apply_decision(self, decision: int, config: Configuration) -> Configuration:
+    @classmethod
+    def apply_decision(cls, decision: int, config: Configuration) -> Configuration:
         """
         apply the given decision
         In case where the statie is terminal do nothing (Padding)
         """
         # todo: if nothing is valid, backup solution. (this means the parser did some very bad thing, such as only shifting)
-        if self.is_terminal(config):
+        if cls.is_terminal(config):
             return config
 
-        if decision == self.SHIFT:
-            return self.shift(config)
-        elif decision == self.REDUCE:
-            return self.reduce(config)
-        elif decision == self.LEFT:
-            return self.left_arc(config)
-        elif decision == self.RIGHT:
-            return self.right_arc(config)
+        if decision == cls.SHIFT:
+            return cls.shift(config)
+        elif decision == cls.REDUCE:
+            return cls.reduce(config)
+        elif decision == cls.LEFT:
+            return cls.left_arc(config)
+        elif decision == cls.RIGHT:
+            return cls.right_arc(config)
         else:
             raise ValueError(
                 f"Decision number ({decision}) is out of scope for arc-eager transition"

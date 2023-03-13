@@ -185,8 +185,6 @@ class DynamicOracleCovington(DynamicOracle):
                 return not (a.head.position == gold_head)
         return False
 
-    # TODO: This can be done more efficient
-    # TODO: check this function, there is an infinite loop here.
     # O(n^2)
     def weakly_connected(self, arcs, head, dependent):
         """

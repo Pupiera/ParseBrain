@@ -4,7 +4,7 @@ import torch
 
 
 class ConfigurationFeaturesComputer:
-    def compute_feature(self, stack: List, buffer: List, device: str):
+    def compute_feature(self, stack: List, buffer: List, has_root: List, device: str):
         raise NotImplementedError
 
 
@@ -14,13 +14,20 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
     Here the logic is to concatenate the n top element of the stack and the first (next) element of the buffer.
     """
 
-    def __init__(self, stack_depth: int, dim: int):
+    def __init__(self, stack_depth: int, dim: int, embedding):
         super().__init__()
         self.stack_depth = stack_depth
         self.dim = dim
+        self.emb = embedding
+        self.STACK_PADDING_INDEX = 1
+        self.BUFFER_PADDING_INDEX = 2
 
     def compute_feature(
-        self, stack: List[List[int]], buffer: List[torch.Tensor], device: str
+        self,
+        stack: List[List[int]],
+        buffer: List[torch.Tensor],
+        has_root: List,
+        device: str,
     ):
         """
         Return a tensor of shape [batch, (1+self.stack_depth)*dim]
@@ -39,26 +46,39 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         >>> x.shape
         torch.Size([2, 30])
         """
-        # todo: find way to remove for loop...
         n_buffer = 1
         batch_size = len(stack)
-        emb_stack = torch.zeros((batch_size, self.stack_depth, self.dim)).to(device)
-        emb_buffer = torch.zeros((batch_size, n_buffer, self.dim)).to(device)
+        # emb_stack = self.emb(
+        #    torch.ones((batch_size, self.stack_depth), dtype=torch.long, device=device)
+        #    * self.STACK_PADDING_INDEX
+        # )
+        emb_stack = torch.zeros((batch_size, self.stack_depth, self.dim), device=device)
+        emb_buffer = self.emb(
+            torch.ones((batch_size, n_buffer), dtype=torch.long, device=device)
+            * self.BUFFER_PADDING_INDEX
+        )
+        emb_buffer = torch.zeros((batch_size, n_buffer, self.dim), device=device)
 
         stack_list = [torch.stack(x[-self.stack_depth :]) if x else [] for x in stack]
+        # print("stack_list")
+        # print(stack_list)
         for i, s in enumerate(stack_list):
             if len(s) > 0:
                 emb_stack[i, 0 : s.shape[0], :] = s
-        buffer_list = [x[-n_buffer:] for x in buffer]
+        buffer_list = [x[:n_buffer] for x in buffer]
         for i, b in enumerate(buffer_list):
             if len(b) > 0:
                 emb_buffer[i, 0 : b.shape[0], :] = b
         result = torch.cat((emb_buffer, emb_stack), dim=1)
-        return result.reshape(batch_size, -1)
+        result = result.reshape((batch_size, -1))
+        return result
 
 
 class ConfigurationFeaturesComputerConcatRNN(ConfigurationFeaturesComputerConcat):
-    def compute_feature(self, stack: List, buffer: List, device: str):
+    def __init__(self, stack_depth: int, dim: int, embedding):
+        super().__init__(stack_depth, dim, embedding)
+
+    def compute_feature(self, stack: List, buffer: List, has_root: List, device: str):
         # toDo: Newest is at the end of tensor... Should it be reversed ?
         """
         Return a tensor of shape [batch, 1+ len(padded(stack)), dim]
@@ -85,20 +105,25 @@ class ConfigurationFeaturesComputerConcatRNN(ConfigurationFeaturesComputerConcat
         batch_size = len(stack)
         stack_depth = self.stack_depth
         tmp_stack = []
+        # todo: add root here if stack empty and root not done.
         for x in stack:
             try:
+                # take everything it can until stack_depth
                 x = torch.stack(x[-stack_depth:])
-                tmp_stack.append(torch.reshape(x, (stack_depth, self.dim)))
+                if len(x.size()) == 0:
+                    tmp_stack.append(
+                        torch.zeros(size=(stack_depth, self.dim)).to(device)
+                    )
+                else:
+                    tmp_stack.append(x)
             except RuntimeError:
-                # x[-stack_depth:] empty
+                # x[-stack_depth:] empty or not long enough
                 tmp_stack.append(torch.zeros(size=(stack_depth, self.dim)).to(device))
         emb_stack = torch.nn.utils.rnn.pad_sequence(
             tmp_stack,
             batch_first=True,
             padding_value=0.0,
         ).to(device)
-        emb_stack = torch.reshape(emb_stack, (batch_size, stack_depth, self.dim))
-        # emb_stack = torch.reshape(emb_stack, )
         # if need to be able to take multiple element of buffer, update this. (remove unsqueeze and edit x[0])
         tmp_buffer = []
         for x in buffer:
@@ -107,8 +132,11 @@ class ConfigurationFeaturesComputerConcatRNN(ConfigurationFeaturesComputerConcat
             except IndexError:
                 tmp_buffer.append(torch.zeros(self.dim).to(device))
 
-        emb_buffer = torch.stack(tmp_buffer).unsqueeze(1).to(device)
+        # case where we only take the first element of buffer, need to add the seq_len dimension.
+        if len(emb_buffer.shape) == 2:
+            emb_buffer = torch.stack(tmp_buffer).unsqueeze(1).to(device)
         result = torch.cat((emb_buffer, emb_stack), dim=1)
+
         return result
 
 

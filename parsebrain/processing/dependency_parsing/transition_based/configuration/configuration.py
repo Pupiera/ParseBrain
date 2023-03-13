@@ -56,7 +56,7 @@ class GoldConfiguration:
 
     def __init__(
         self, gov: List[int] = None, label: List[str] = None, sent_id: str = None
-    ):
+    ) -> object:
         """
         >>> gov = [2,0,2,3]
         >>> lab = ['X','root','Y', 'Z']

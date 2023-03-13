@@ -3,11 +3,14 @@ import torch
 from parsebrain.processing.dependency_parsing.transition_based.configuration import (
     Configuration,
 )
-from parsebrain.processing.dependency_parsing.transition_based.transition import (
+from parsebrain.processing.dependency_parsing.transition_based.transition.transition import (
     Transition,
 )
 from tarjan import tarjan
-from .arc import LeftArc, RightArc
+from parsebrain.processing.dependency_parsing.transition_based.transition.arc import (
+    LeftArc,
+    RightArc,
+)
 
 
 class CovingtonTransition(Transition):
@@ -31,7 +34,30 @@ class CovingtonTransition(Transition):
     def get_relation_from_decision(
         self, decision: int, config: Configuration
     ) -> (torch.Tensor, torch.tensor):
-        pass
+        """
+        Return the head an the dependent based on the decision taken, used to compute the label
+        @param decision:
+        @param config:
+        @return:
+        """
+        if len(config.stack) > 0:
+            stack = config.stack[-1]
+        elif not config.has_root:
+            stack = config.root.squeeze()
+        else:
+            device = config.buffer[0].device
+            stack = torch.zeros(config.buffer[0].size()).to(device)
+        if len(config.buffer) > 0:
+            buffer = config.buffer[0]
+        else:
+            device = config.stack[0].device
+            buffer = torch.zeros(config.stack[0].size()).to(device)
+        if decision == self.RIGHT:
+            return stack, buffer
+        elif decision == self.LEFT:
+            return buffer, stack
+        else:  # if not valid, default = right and will be padded
+            return stack, buffer
 
     def is_decision_valid(self, decision: int, config: Configuration) -> bool:
         if self.is_terminal(config):
@@ -87,7 +113,8 @@ class CovingtonTransition(Transition):
         Shift: 〈λ1, λ2, j|B, A〉 ⇒ 〈λ1 · λ2|j, [], B, A
         @param config:
         @return:
-        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],["Hey", "Parsing", "Is", "Fun"])
+        >>> from parsebrain.processing.dependency_parsing.transition_based.configuration import Word
+        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],["Hey", "Parsing", "Is", "Fun"], root_embedding=[0])
         >>> conf = CovingtonTransition.shift(conf)
         >>> conf.stack, conf.stack_string, conf.stack2, conf.stack2_string
         (['Hey'], ['Hey'], [], [])
@@ -143,16 +170,15 @@ class CovingtonTransition(Transition):
         @param dependent:
         @param arcs:
         @return: True if the addition of an arc between head and dependent would cause a cycle, False otherwise
-        >>> from processing.dependency_parsing.transition_based.configuration import Word
-        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],[Word("Hey",1), Word("Parsing",2), Word("Is",3), Word("Fun",4)])
+        >>> from parsebrain.processing.dependency_parsing.transition_based.configuration import Word
+        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],[Word("Hey",1), Word("Parsing",2), Word("Is",3), Word("Fun",4)], root_embedding=[0])
         >>> conf = CovingtonTransition.shift(conf)
         >>> conf = CovingtonTransition.left_arc(conf)
         >>> conf = CovingtonTransition.shift(conf)
         >>> CovingtonTransition.cycle_check(conf.buffer_string[0], conf.stack_string[-1], conf.arc)
         False
         >>> conf = CovingtonTransition.left_arc(conf)
-        >>>conf.stack_string, conf.buffer_string
-        >>> CovingtonTransition.cycle_check(conf.buffer_string[0],conf.stack_string[-1], conf.arc)
+        >>> CovingtonTransition.cycle_check(conf.stack_string[-1],conf.buffer_string[0], conf.arc) # if do right arc
         True
         """
         # no cycle possible, so should be 0 before adding the potential arcs
@@ -175,8 +201,8 @@ class CovingtonTransition(Transition):
          only if not_exist(k) | k → i ∈ A (single-head) and i →∗ j !∈ A (acyclicity)
         @param config:
         @return:
-
-        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],["Hey", "Parsing", "Is", "Fun"])
+        >>> from parsebrain.processing.dependency_parsing.transition_based.configuration import Word
+        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],["Hey", "Parsing", "Is", "Fun"], root_embedding=[0])
         >>> conf = CovingtonTransition.shift(conf)
         >>> conf = CovingtonTransition.left_arc(conf)
         >>> conf.stack, conf.stack_string, conf.stack2, conf.stack2_string, conf.buffer, conf.buffer_string, str(conf.arc[0])
@@ -229,8 +255,7 @@ class CovingtonTransition(Transition):
         only if not_exist(k) | k → i ∈ A (single-head) and i →∗ j !∈ A (acyclicity)
         @param config:
         @return:
-
-        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],["Hey", "Parsing", "Is", "Fun"])
+        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],["Hey", "Parsing", "Is", "Fun"], root_embedding=[0])
         >>> conf = CovingtonTransition.shift(conf)
         >>> conf = CovingtonTransition.right_arc(conf)
         >>> conf.stack, conf.stack_string, conf.stack2, conf.stack2_string, conf.buffer, conf.buffer_string, str(conf.arc[0])
@@ -273,8 +298,8 @@ class CovingtonTransition(Transition):
 
         @param config:
         @return:
-
-        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],["Hey", "Parsing", "Is", "Fun"])
+        >>> from parsebrain.processing.dependency_parsing.transition_based.configuration import Word
+        >>> conf = Configuration(["Hey", "Parsing", "Is", "Fun"],["Hey", "Parsing", "Is", "Fun"], root_embedding=[0])
         >>> conf = CovingtonTransition.shift(conf)
         >>> conf = CovingtonTransition.no_arc(conf)
         >>> conf.stack, conf.stack_string, conf.stack2, conf.stack2_string, conf.buffer, conf.buffer_string

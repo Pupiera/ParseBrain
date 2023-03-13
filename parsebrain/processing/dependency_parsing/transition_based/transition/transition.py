@@ -4,7 +4,7 @@ from parsebrain.processing.dependency_parsing.transition_based.configuration imp
     Configuration,
     Word,
 )
-from .arc import Arc
+from parsebrain.processing.dependency_parsing.transition_based.transition.arc import Arc
 from typing import List
 
 
