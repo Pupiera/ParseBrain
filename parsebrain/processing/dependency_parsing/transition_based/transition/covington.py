@@ -105,7 +105,29 @@ class CovingtonTransition(Transition):
 
     @staticmethod
     def shift_condition(config):
-        return len(config.buffer_string) != 0
+        if len(config.buffer_string) == 0:
+            return False
+        if len(config.buffer_string) > 1:
+            return True
+        wi = config.buffer_string[0]
+        # if last shift, need to have a head (won't be able to get it after the shift...)
+        # and CovingtonTransition.all_stack_has_head(config):
+        if CovingtonTransition.has_head(wi, config.arc):
+            return True
+        else:
+            return False
+
+    @staticmethod
+    def all_stack_has_head(config):
+        """
+        No point in checking the one in stack 2, they need a shift to be accessible.
+        @param config:
+        @return:
+        """
+        for w in config.stack_string:
+            if not CovingtonTransition.has_head(w, config.arc):
+                return False
+        return True
 
     @staticmethod
     def shift(config: Configuration):
@@ -290,6 +312,16 @@ class CovingtonTransition(Transition):
 
     @staticmethod
     def no_arc_condition(config):
+        # Specific case to avoid having nothing in the stack and only one element wihout head in the buffer
+        # This situation would be a dead end for the parser (can't shift because the buffer element would never have a head
+        # and can't right arc since there is nothing on the stack.
+        if (
+            len(config.buffer_string) == 1
+            and len(config.stack_string) == 1
+            and config.has_root
+            and not CovingtonTransition.has_head(config.buffer_string[0], config.arc)
+        ):
+            return False
         return len(config.stack_string) >= 1
 
     @staticmethod

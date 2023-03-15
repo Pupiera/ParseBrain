@@ -14,7 +14,7 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
     Here the logic is to concatenate the n top element of the stack and the first (next) element of the buffer.
     """
 
-    def __init__(self, stack_depth: int, dim: int, embedding):
+    def __init__(self, stack_depth: int, dim: int, embedding=None):
         super().__init__()
         self.stack_depth = stack_depth
         self.dim = dim
@@ -48,16 +48,22 @@ class ConfigurationFeaturesComputerConcat(ConfigurationFeaturesComputer):
         """
         n_buffer = 1
         batch_size = len(stack)
-        # emb_stack = self.emb(
-        #    torch.ones((batch_size, self.stack_depth), dtype=torch.long, device=device)
-        #    * self.STACK_PADDING_INDEX
-        # )
-        emb_stack = torch.zeros((batch_size, self.stack_depth, self.dim), device=device)
-        emb_buffer = self.emb(
-            torch.ones((batch_size, n_buffer), dtype=torch.long, device=device)
-            * self.BUFFER_PADDING_INDEX
-        )
-        emb_buffer = torch.zeros((batch_size, n_buffer, self.dim), device=device)
+        if self.emb is None:
+            emb_stack = torch.zeros(
+                (batch_size, self.stack_depth, self.dim), device=device
+            )
+            emb_buffer = torch.zeros((batch_size, n_buffer, self.dim), device=device)
+        else:
+            emb_stack = self.emb(
+                torch.ones(
+                    (batch_size, self.stack_depth), dtype=torch.long, device=device
+                )
+                * self.STACK_PADDING_INDEX
+            )
+            emb_buffer = self.emb(
+                torch.ones((batch_size, n_buffer), dtype=torch.long, device=device)
+                * self.BUFFER_PADDING_INDEX
+            )
 
         stack_list = [torch.stack(x[-self.stack_depth :]) if x else [] for x in stack]
         # print("stack_list")
