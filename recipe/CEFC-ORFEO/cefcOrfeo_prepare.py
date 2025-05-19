@@ -18,7 +18,7 @@ from tqdm.contrib import tzip
 logger = logging.getLogger(__name__)
 
 
-def prepare_cefcOrfeo( 
+def prepare_cefcOrfeo(
     data_folder,
     save_folder,
     train_tsv_file=None,
@@ -30,12 +30,12 @@ def prepare_cefcOrfeo(
 
     """
     Prepares the csv files for the Mozilla Common Voice dataset.
-    Download: 
+    Download:
 
     Arguments
     ---------
     data_folder : str
-        Path to the folder where the pre-processed 
+        Path to the folder where the pre-processed
         (via create_tsv.py and splitwav.py) Cefc-orfeo dataset is stored.
     save_folder : str
         The directory where to store the csv files.
@@ -122,6 +122,7 @@ def prepare_cefcOrfeo(
             accented_letters,
         )
 
+
 def skip(save_csv_train, save_csv_dev, save_csv_test):
     """
     Detects if the Common Voice data preparation has been already done.
@@ -146,6 +147,7 @@ def skip(save_csv_train, save_csv_dev, save_csv_test):
         skip = True
 
     return skip
+
 
 def create_csv(
     orig_tsv_file, csv_file, data_folder, accented_letters=False, language="en"
@@ -185,33 +187,41 @@ def create_csv(
     msg = "Creating csv lists in %s ..." % (csv_file)
     logger.info(msg)
 
-    csv_lines = [["ID", "duration", "wav", "wrd", "pos", "gov", "dep"]]
+    csv_lines = [["ID", "duration", "wav", "wrd", "pos", "gov", "dep", "start_word", "end_word"]]
 
     # Start processing lines
     total_duration = 0.0
     for line in tzip(loaded_csv):
 
         line = line[0]
-        splited = line.split("\t") 
+        splited = line.split("\t")
         # Path is at indice 1 in cefc-orfeo tsv files.
-        file=splited[1]
+        file = splited[1]
         # all file are stored in "nameofcorpus_clips"
         try:
-            folder=file.split("-")[1]
+            folder = file.split("-")[1]
         except IndexError as e:
             print(line)
             raise IndexError(e)
-        wav_path = data_folder +"/"+ folder +"/"+ folder+"_clips/"+file.replace(" ","")
+        wav_path = (
+            data_folder
+            + "/"
+            + folder
+            + "/"
+            + folder
+            + "_clips/"
+            + file.replace(" ", "")
+        )
         file_name = wav_path.split(".")[-2].split("/")[-1]
-        s_id = line.split("\t")[0].replace(" ","")
+        s_id = line.split("\t")[0].replace(" ", "")
         if os.path.isfile(wav_path):
             info = torchaudio.info(wav_path)
         else:
-            #print(wav_path)
+            # print(wav_path)
             msg = "\tError loading: %s" % (str(len(file_name)))
             logger.info(msg)
             continue
-        
+
         duration = info.num_frames / info.sample_rate
         total_duration += duration
 
@@ -227,7 +237,7 @@ def create_csv(
             "[^’'A-Za-z0-9À-ÖØ-öø-ÿЀ-ӿéæœâçèàûî]+", " ", words
         ).upper()
         words = words.replace("'", " ")
-        words = words.replace("’", " ") 
+        words = words.replace("’", " ")
         if not accented_letters:
             words = strip_accents(words)
             words = words.replace("'", " ")
@@ -247,10 +257,15 @@ def create_csv(
             continue
 
         pos = splited[3].upper()
+        # Harmonizing data (VINF and VNF are the same label and N and NOM too)
+        pos = pos.replace("VINF", "VNF").replace(" N ", " NOM ")
         gov = splited[4].upper()
-        dep = splited[5].replace("\n","").upper()
+        dep = splited[5].replace("\n", "").upper()
+
+        start_word = splited[6]
+        end_word = splited[7]
         # Composition of the csv_line
-        csv_line = [s_id, str(duration), wav_path, str(words), pos, gov, dep]
+        csv_line = [s_id, str(duration), wav_path, str(words), pos, gov, dep, start_word, end_word]
         csv_lines.append(csv_line)
 
     with open(csv_file, mode="w", encoding="utf-8") as csv_f:
@@ -269,6 +284,7 @@ def create_csv(
     msg = "Total duration: %s Hours" % (str(round(total_duration / 3600, 2)))
     logger.info(msg)
 
+
 def unicode_normalisation(text):
 
     try:
@@ -280,11 +296,7 @@ def unicode_normalisation(text):
 
 def strip_accents(text):
 
-    text = (
-        unicodedata.normalize("NFD", text)
-        .encode("ascii", "ignore")
-        .decode("utf-8")
-    )
+    text = unicodedata.normalize("NFD", text).encode("ascii", "ignore").decode("utf-8")
 
     return str(text)
 
@@ -304,9 +316,9 @@ def check_cefcOrfeo_file(data_folder):
     FileNotFoundError
         If data folder doesn't contain Common Voice dataset.
     """
-    files_str="/cfpb/cfpb_clips"
+    files_str = "/cfpb/cfpb_clips"
 
-    #checking first folder 
+    # checking first folder
     if not os.path.exists(data_folder + files_str):
 
         err_msg = (
@@ -314,22 +326,29 @@ def check_cefcOrfeo_file(data_folder):
             "the orfeo dataset)" % (data_folder + files_str)
         )
         raise FileNotFoundError(err_msg)
-if __name__ =="__main__":
 
-    user_folder="/home/getalp/data/ASR_data/FR/CORPUS_AUDIO"
-    data_folder = user_folder+'/cefc-orfeo_v.1.5_december2021/11/cleaned_v2'
-    save_folder = 'orfeosave/orfeo_cleaned_v2'
-    train_tsv_file = user_folder+'/cefc-orfeo_v.1.5_december2021/11/cleaned_v2/mixed_train.tsv'
-    dev_tsv_file = user_folder+'/cefc-orfeo_v.1.5_december2021/11/cleaned_v2/gold_valid.tsv'
-    test_tsv_file = user_folder+'/cefc-orfeo_v.1.5_december2021/11/cleaned_v2/gold_test.tsv'
+
+if __name__ == "__main__":
+
+    user_folder = "/home/getalp/data/ASR_data/FR/CORPUS_AUDIO"
+    data_folder = user_folder + "/cefc-orfeo_v.1.5_december2021/11/cleaned_v2"
+    save_folder = "orfeosave/orfeo_cleaned_v2"
+    train_tsv_file = (
+        user_folder + "/cefc-orfeo_v.1.5_december2021/11/cleaned_v2/mixed_train.tsv"
+    )
+    dev_tsv_file = (
+        user_folder + "/cefc-orfeo_v.1.5_december2021/11/cleaned_v2/gold_valid.tsv"
+    )
+    test_tsv_file = (
+        user_folder + "/cefc-orfeo_v.1.5_december2021/11/cleaned_v2/gold_test.tsv"
+    )
     accented_letters = True
     duration_threshold = 10
-    prepare_cefcOrfeo( 
-            data_folder, 
-            save_folder, 
-            train_tsv_file, 
-            dev_tsv_file, 
-            test_tsv_file, 
-            accented_letters, 
-            )
-
+    prepare_cefcOrfeo(
+        data_folder,
+        save_folder,
+        train_tsv_file,
+        dev_tsv_file,
+        test_tsv_file,
+        accented_letters,
+    )

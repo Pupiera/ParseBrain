@@ -7,7 +7,7 @@
 # Seed needs to be set at top of yaml, before objects with parameters are made
 seed: 1234
 __set_seed: !!python/object/apply:torch.manual_seed [!ref <seed>]
-output_folder: !ref results/wav2vec2_ctc_FR_AUDIO/<seed>
+output_folder: !ref results/wav2vec2_ctc_FR_AUDIO_TIMESTAMP/<seed>
 wer_file: !ref <output_folder>/wer.txt
 save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
@@ -28,9 +28,9 @@ test_csv: !ref <save_folder>/test.csv
 skip_prep: True # Skip data preparation
 
 #CONLLU GOLD FILE used for evaluation
-dir_gold_conllu: /home/getalp/pupiera/thesis/endtoend_asr_multitask/src/conllu/gold
-dev_gold_conllu: !ref <dir_gold_conllu>/cleaned_v2_valid.conllu
-test_gold_conllu: !ref <dir_gold_conllu>/cleaned_v2_test.conllu
+dir_gold_conllu: /home/getalp/pupiera/package/ParseBrain/recipe/CEFC-ORFEO/orfeosave/orfeo_cleaned_v2/conllu #/home/getalp/pupiera/thesis/endtoend_asr_multitask/src/conllu/gold
+dev_gold_conllu: !ref <dir_gold_conllu>/dev_TS_cleaned.conllu
+test_gold_conllu: !ref <dir_gold_conllu>/test_TS_cleaned.conllu
 dev_output_conllu: !ref <output_folder>/Eval-Valid_AUDIO
 test_output_conllu: !ref <output_folder>/Eval-test_AUDIO
 transcript_file: transcript_test_AUDIO
@@ -197,6 +197,8 @@ log_softmax: !new:speechbrain.nnet.activations.Softmax
 
 
 # Loss functions
+
+ASR_weight: 1.0
 
 ctc_cost: !name:speechbrain.nnet.losses.ctc_loss
     blank_index: !ref <blank_index>

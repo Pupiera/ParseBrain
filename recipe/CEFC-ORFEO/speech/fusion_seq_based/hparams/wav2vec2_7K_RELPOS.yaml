@@ -9,6 +9,7 @@ seed: 1234
 __set_seed: !!python/object/apply:torch.manual_seed [!ref <seed>]
 output_folder: !ref results/wav2vec2_ctc_FR_AUDIO/<seed>
 wer_file: !ref <output_folder>/wer.txt
+wer_file_valid: !ref <output_folder>/wer_valid.txt
 save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
 
@@ -65,7 +66,7 @@ test_dataloader_options:
     num_workers: 6
 
 # BPE parameters
-token_type: char  # ["unigram", "bpe", "char"]
+token_type: unigram  # ["unigram", "bpe", "char"]
 character_coverage: 1.0
 
 # Model parameters
@@ -74,10 +75,12 @@ dnn_layers: 3
 dnn_neurons: 1024
 emb_size: 128
 dec_neurons: 1024
+dec_hidden_size: !ref <dec_neurons>
+dec_attn_dim: !ref <dec_neurons>
 freeze_wav2vec: False
 
 # Outputs
-output_neurons: 76  # BPE size, index(blank/eos/bos) = 0
+output_neurons: 500  # BPE size, index(blank/eos/bos) = 0
 
 # Decoding parameters
 # Be sure that the bos and eos index match with the BPEs ones
@@ -86,36 +89,38 @@ bos_index: 1
 eos_index: 2
 min_decode_ratio: 0.0
 max_decode_ratio: 1.0
-beam_size: 80
+beam_size: 40
 eos_threshold: 1.5
 using_max_attn_shift: True
 max_attn_shift: 140
 ctc_weight_decode: 0.0
 temperature: 1.50
 
-#
-# FUSION LAYER
-#
-
-repFusionHidden: 500
-repFusionBidirectional: False
-repFusionLayers: 2
-RepFusionModel: !new:speechbrain.nnet.RNN.LSTM
-    input_shape: [null, null, 1024] # enc val
-    hidden_size: !ref <repFusionHidden>
-    num_layers: !ref <repFusionLayers>
-    bias: True
-    dropout: 0.5
-    bidirectional: !ref <repFusionBidirectional>
 
 #
 # DEP2LABEL
 #
-input_size: !ref <repFusionHidden> #* !ref <repFusionBidirectional>+1
+input_size: 1024 #* !ref <repFusionBidirectional>+1
 dep2LabelHidden: 800
-output_neuronsDep: 19 #Nb Label of dep
-output_neuronsGov: 846 #Nb label of Gov + relPos
-output_neuronsPOS: 23 #Nb different POS
+output_neuronsDEP: 21 #Nb Label of dep +2 BOS/EOS
+output_neuronsGOV: 848 #Nb label of Gov + relPos +2 BOS/EOS
+output_neuronsPOS: 25 #Nb different POS +2 BOS/EOS
+
+#
+# BOS / EOS
+#
+pos_bos: 23
+gov_bos: 846
+dep_bos: 19
+
+pos_eos: 24
+gov_eos: 847
+dep_eos: 20
+
+#
+#
+#
+
 dep2LabelFeat: !new:speechbrain.nnet.RNN.LSTM
     input_shape: [null,null, !ref <input_size>]
     hidden_size: !ref <dep2LabelHidden>
@@ -126,16 +131,114 @@ dep2LabelFeat: !new:speechbrain.nnet.RNN.LSTM
 
 depDep2Label: !new:speechbrain.nnet.linear.Linear
     input_size: !ref <dep2LabelHidden>*2
-    n_neurons: !ref <output_neuronsDep>
+    n_neurons: !ref <output_neuronsDEP>
 
 govDep2Label: !new:speechbrain.nnet.linear.Linear
     input_size:  !ref <dep2LabelHidden>*2
-    n_neurons: !ref <output_neuronsGov>
+    n_neurons: !ref <output_neuronsGOV>
 
 posDep2Label: !new:speechbrain.nnet.linear.Linear
     input_size:  !ref <dep2LabelHidden>*2
     n_neurons: !ref <output_neuronsPOS>
 
+
+
+
+#
+# embedding
+#
+
+emb_size_synt: 128
+emb_size_asr: 256
+
+emb_asr: !new:speechbrain.nnet.embedding.Embedding
+    num_embeddings: !ref <output_neurons>
+    embedding_dim: !ref <emb_size_asr>
+
+pos_emb: !new:speechbrain.nnet.embedding.Embedding
+    num_embeddings: !ref <output_neuronsPOS>
+    embedding_dim: !ref <emb_size_synt>
+
+gov_emb: !new:speechbrain.nnet.embedding.Embedding
+    num_embeddings: !ref <output_neuronsGOV>
+    embedding_dim: !ref <emb_size_synt>
+
+dep_emb: !new:speechbrain.nnet.embedding.Embedding
+    num_embeddings: !ref <output_neuronsDEP>
+    embedding_dim: !ref <emb_size_synt>
+
+#
+# Word_speech_rep
+#
+
+combine_model: !new:speechbrain.nnet.containers.Sequential
+    input_shape: [null, null, 1024]
+    linear1: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1024
+        bias: True
+
+score_model: !new:speechbrain.nnet.containers.Sequential
+    input_shape: [null, null, 1024]
+    linear1: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1024
+        bias: True
+    bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+    linear_head: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1
+        bias: 1
+    output_act: !new:torch.nn.Sigmoid
+
+
+
+
+#
+# seq2seq
+#
+
+emb_size_total: !ref <emb_size_synt>*3 + <emb_size_asr>
+
+seqdec: !new:speechbrain.nnet.RNN.AttentionalRNNDecoder
+    enc_dim: !ref <dec_neurons>
+    input_size: !ref <emb_size_total>
+    rnn_type: gru
+    attn_type: location
+    hidden_size: !ref <dec_hidden_size>
+    attn_dim: !ref <dec_attn_dim>
+    num_layers: 1
+    scaling: 1.0
+    channels: 10
+    kernel_size: 100
+    re_init: True
+    dropout: 0.15
+
+seq_lin: !new:speechbrain.nnet.linear.Linear
+    input_size: !ref <dec_neurons>
+    n_neurons: !ref <output_neurons>
+
+beam_searcher: !new:parsebrain.speechbrain_custom.decoders.seq2seq.S2SRNNBeamSearcherSyntax
+    embedding: !ref <emb_asr>
+    decoder: !ref <seqdec>
+    linear: !ref <seq_lin>
+    ctc_linear: !ref <ctc_lin>
+    bos_index: !ref <bos_index>
+    eos_index: !ref <eos_index>
+    blank_index: !ref <blank_index>
+    min_decode_ratio: !ref <min_decode_ratio>
+    max_decode_ratio: !ref <max_decode_ratio>
+    beam_size: !ref <beam_size>
+    eos_threshold: !ref <eos_threshold>
+    using_max_attn_shift: !ref <using_max_attn_shift>
+    max_attn_shift: !ref <max_attn_shift>
+    temperature: !ref <temperature>
+
+greedy_search: !new:parsebrain.speechbrain_custom.decoders.seq2seq.S2SRNNGreedySearcherSyntax
+    embedding: !ref <emb_asr>
+    decoder: !ref <seqdec>
+    linear: !ref <seq_lin>
+    bos_index: !ref <bos_index>
+    eos_index: !ref <eos_index>
+    min_decode_ratio: !ref <min_decode_ratio>
+    max_decode_ratio: !ref <max_decode_ratio>
 #
 # Functions and classes
 #
@@ -174,6 +277,9 @@ wav2vec2: !new:speechbrain.lobes.models.huggingface_wav2vec.HuggingFaceWav2Vec2
     freeze: !ref <freeze_wav2vec>
     save_path: !ref <save_folder>/wav2vec2_checkpoint
 
+
+
+
 #####
 # Uncomment this block if you prefer to use a Fairseq pretrained model instead
 # of a HuggingFace one. Here, we provide an URL that is obtained from the
@@ -201,6 +307,9 @@ log_softmax: !new:speechbrain.nnet.activations.Softmax
 ctc_cost: !name:speechbrain.nnet.losses.ctc_loss
     blank_index: !ref <blank_index>
 
+seq_cost: !name:speechbrain.nnet.losses.nll_loss
+    label_smoothing: 0.1
+
 depLabel_cost: !name:speechbrain.nnet.losses.nll_loss
 
 govLabel_cost: !name:speechbrain.nnet.losses.nll_loss
@@ -213,16 +322,23 @@ modules:
     wav2vec2: !ref <wav2vec2>
     enc: !ref <enc>
     ctc_lin: !ref <ctc_lin>
-    RepFusionModel: !ref <RepFusionModel>
     dep2LabelFeat : !ref <dep2LabelFeat>
     depDep2Label: !ref <depDep2Label>
     govDep2Label: !ref <govDep2Label>
     posDep2Label: !ref <posDep2Label>
+    word_speech_rep: !ref <word_speech_rep>
+    seqdec: !ref <seqdec>
+    seq_lin: !ref <seq_lin>
+    emb_asr: !ref <emb_asr>
+    pos_emb: !ref <pos_emb>
+    gov_emb: !ref <gov_emb>
+    dep_emb: !ref <dep_emb>
 
 
 model: !new:torch.nn.ModuleList
-    - [!ref <enc>, !ref <ctc_lin>, !ref <RepFusionModel>, !ref <dep2LabelFeat>,
-       !ref <posDep2Label>, !ref <depDep2Label>, !ref <govDep2Label>]
+    - [!ref <wav2vec2> ,!ref <enc>, !ref <ctc_lin>, !ref <dep2LabelFeat>, !ref <combine_model>,
+       !ref <score_model> ,!ref <posDep2Label>, !ref <depDep2Label>, !ref <govDep2Label>,
+    !ref <emb_asr>, !ref <pos_emb>, !ref <gov_emb>, !ref <dep_emb>]
 
 model_opt_class: !name:torch.optim.Adadelta
     lr: !ref <lr>
@@ -256,6 +372,7 @@ checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
 train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
     save_file: !ref <train_log>
 
+
 #train_logger: !new:speechbrain.utils.train_logger.WandBLogger
 #        yaml_config: hparams/logger.yaml
 
@@ -274,6 +391,12 @@ gov2Label_computer: !name:speechbrain.utils.metric_stats.BinaryMetricStats
 #
 # PARSING ARCHI
 #
+
+word_speech_rep: !new:parsebrain.processing.word_speech_rep.WordSpeechBinaryFusion
+    combine_model: !ref <combine_model>
+    score_model: !ref <score_model>
+    fusion_threshold: 0.5
+
 
 reader_alig:  !new:parsebrain.processing.dependency_parsing.sequence_labeling.alignment_oracle.reader.ReaderSpeechbrain
 

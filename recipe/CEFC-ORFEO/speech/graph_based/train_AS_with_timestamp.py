@@ -30,6 +30,10 @@ from operator import itemgetter
 # ----------------------------------------- Import profiling -------------------------------------------#
 import wandb
 
+#----------------------------------------- torch metric ---------------------------------#
+
+from torchmetrics import F1Score
+
 """Recipe for training a sequence-to-sequence ASR system with Orfeo.
 The system employs a wav2vec2 encoder and a ASRDep2Label decoder.
 Decoding is performed with greedy decoding (will be extended to beam search with language model).
@@ -85,30 +89,43 @@ class ASR(sb.core.Brain):
         if stage == sb.Stage.TRAIN:
             if hasattr(self.hparams, "augmentation"):
                 wavs = self.hparams.augmentation(wavs, wav_lens)
+        #print(batch.id)
 
         # Forward pass ASR
-
         feats = self.modules.wav2vec2(wavs)
-        
-        if hasattr(self.hparams, "syntax_layers"):
-            x_syntax = feats[int(self.hparams.syntax_layers)]
-            feats = feats[-1]
-
-
         x = self.modules.enc(feats)  # [batch,time,1024]
+        #print(f"x shape {x.shape}")
         logits = self.modules.ctc_lin(x)  # [batch,time,76]
+
         # [batch,time,76] (76 in output neurons corresponding to BPE size)
         p_ctc = self.hparams.log_softmax(logits)
+
+        #p_bio = self.hparams.log_softmax(logits_bio)
         # Forward pass dependency parsing
-        result = {"p_ctc": p_ctc, "wav_lens": wav_lens}
+        length = torch.tensor([int(wav_len * x.shape[1]) for wav_len in wav_lens])
+        result = {"p_ctc": p_ctc, "wav_lens": wav_lens, "length": length}
         if self.is_training_syntax:
+            #todo : replace the CTC decode by classic CTC decode
             sequence, mapFrameToWord = ctc_greedy_decode(
                 p_ctc, wav_lens, blank_id=self.hparams.blank_index
             )
-            if hasattr(self.hparams, "syntax_layers"):
-                input_dep, seq_len = self._create_inputDep(x_syntax, mapFrameToWord)
-            else:
-                input_dep, seq_len = self._create_inputDep(x, mapFrameToWord)
+            #map_frameToWord = self.collapse_bio(p_bio)
+            start_words = batch.start_words.data
+            end_words = batch.end_words.data
+            bio = self.compute_bio(p_ctc, length, start_words, end_words)
+            map_frame_to_word = self.colapse_bio(bio)
+
+            predicted_timestamp = self.compute_timestamp_from_BIO(bio)
+
+            '''
+            print(f"words : {batch.wrd}")
+            print(f"start words : {start_words}")
+            print(f"end words : {end_words}")
+            print(f"bio {bio}")
+            print(f"map_frame_to_word {map_frame_to_word}")
+            '''
+            input_dep, seq_len = self._create_inputDep(x, map_frame_to_word)
+
             input_dep = input_dep.to(self.device)
             seq_len = seq_len.to(self.device)
             batch_len = input_dep.shape[0]
@@ -123,6 +140,7 @@ class ASR(sb.core.Brain):
             logits_govLabel = self.modules.govDep2Label(lstm_out)
             p_govLabel = self.hparams.log_softmax(logits_govLabel)
             result_parsing = {
+                "p_TS" : predicted_tiemstamp
                 "p_posLabel": p_posLabel,
                 "p_depLabel": p_depLabel,
                 "p_govLabel": p_govLabel,
@@ -130,6 +148,55 @@ class ASR(sb.core.Brain):
             }
             result = {**result, **result_parsing}
         return result
+
+    def compute_timestamp_from_BIO(self, tensor):
+        '''
+        return a list of dict where the key correpsond to the postion of the word in the sequence
+        '''
+        all_indice = []
+        frame_duration = 0.025
+        for i in range(tensor.size(dim)):
+            unique_values, unique_indices = torch.unique(tensor[i], return_inverse=True)
+            indices_dict = {}
+            for i, value in enumerate(unique_values):
+                indices = (unique_indices == i).nonzero().view(-1)
+                indices_dict[value.item()] = {'first': indices[0].item() * frame_duration, 'last': indices[-1].item() * frame_duration}
+            all_indice.append(indices_dict)
+
+        return all_indice
+
+    def colapse_bio(self, decoded_bio):
+        '''
+        There may be some optimized way to compute this (like taking the most likely path
+        while keeping the constraint of each word begining by B).
+        output format : 0 for outside word, and incrementing by 1 for each succesive word. 
+
+        '''
+        #batch_BIO = torch.argmax(p_bio)
+        map_frame_to_word = []
+        for bio in decoded_bio:
+            loc_map = []
+            index = 0
+            inside = False
+            for b in bio:
+                #outside
+                if b == 0:
+                    loc_map.append(0)
+                    inside = False
+                #begin 
+                elif b == 1:
+                    index+=1 
+                    loc_map.append(index)
+                    inside = True
+                #Inside (and begin is before)
+                elif b == 2 and inside:
+                    loc_map.append(index)
+                #Inside (and begin is not before) Should never happen with decoded
+                else:
+                    loc_map.append(0)
+            map_frame_to_word.append(torch.tensor(loc_map))
+        return torch.nn.utils.rnn.pad_sequence(map_frame_to_word, batch_first=True)
+
 
     def _create_inputDep(self, x, mapFrameToWord):
         """
@@ -209,6 +276,7 @@ class ASR(sb.core.Brain):
             )
             # format  [('=', 0, 0), ('D', 1, None), ('=', 2, 1), ('S', 3, 2), ('I', None, 3)]
             # ie : (type of token, gold_position, system_position)
+            '''
             wer_alig = [a["alignment"] for a in wer_details_alig]
             (
                 dep2Label_gov,
@@ -227,6 +295,7 @@ class ASR(sb.core.Brain):
                 self.device
             )
             gold_POS = pad_sequence(gold_POS, batch_first=True).to(self.device)
+            '''
             try:
                 loss_depLabel = self.hparams.depLabel_cost(
                     p_depLabel,
@@ -260,6 +329,44 @@ class ASR(sb.core.Brain):
             "loss_pos": loss_POS,
         }
 
+    def compute_bio(self, p_bio, length, start_words, end_words):
+        '''
+            Compute the supervision based on the wav2vec2 stride and the timestamp
+
+        '''
+        #NEED TO DECIDE WHAT TO DO WHEN GOLD SEGMENT ARE SHORTER THAN A FRAME 
+        # REMOVED THE SAMPLE FROM THE DATA 
+
+        supervision = []
+        #print(f"start word : {start_words}")
+        for start, end, b, l in zip(start_words, end_words, p_bio, length):
+            #put (outside) in every place
+            sup = torch.ones((p_bio.shape[1]), device = self.device, dtype = torch.long) * BIO_dict["outside"]
+            for s_w , e_w in zip(start, end):
+                #print(s_w)
+                #0.02 is the wav2vec2 stride ("about 20ms") but the receptive fields is 25ms.
+                #IDK why with 0.02 sometimes the start index is OOB
+                try:
+                    start_idx = int(s_w / 0.025)
+                    end_idx = int(e_w / 0.025)
+                    sup[start_idx] = BIO_dict["begin"]
+                    sup[start_idx+1:end_idx] = BIO_dict["inside"]
+                    #sup[l-1] = BIO_dict["<end>"]
+                    #use start as padding
+                    #sup[l:] = BIO_dict["<start>"]
+                except IndexError as e:
+                    print("INDEX ERROR")
+                    print(start_words)
+                    print(s_w)
+                    print(start_idx)
+                    print(s_w/0.02)
+                    print(sup.shape)
+                    raise e
+            supervision.append(sup)
+        return torch.stack(supervision)
+
+
+
     def compute_objectives(self, predictions, batch, stage):
         """
         if self.is_training_syntax:
@@ -270,7 +377,7 @@ class ASR(sb.core.Brain):
         ids = batch.id
 
         tokens, tokens_lens = batch.tokens
-        loss = self.hparams.ctc_cost(
+        loss = self.hparams.ASR_weight * self.hparams.ctc_cost(
             predictions["p_ctc"], tokens, predictions["wav_lens"], tokens_lens
         )
         if self.is_training_syntax:
@@ -329,13 +436,15 @@ class ASR(sb.core.Brain):
             )
             self.stage_wer_details.extend(wer_details)
             if self.is_training_syntax:
+                #using gold word since we don't care we have the gold segmentation anyway
                 self.hparams.evaluator.decode(
                     [
                         predictions["p_govLabel"],
                         predictions["p_depLabel"],
                         predictions["p_posLabel"],
                     ],
-                    predicted_words,
+                    [w.split(" ") for w in batch.wrd],
+                    #predicted_words,
                     ids,
                 )
         return loss
@@ -667,6 +776,8 @@ class ASR(sb.core.Brain):
             self.wer_metric = self.hparams.error_rate_computer()
             self.dep2Label_metrics = self.hparams.dep2Label_computer()
             self.gov2Label_metrics = self.hparams.gov2Label_computer()
+            #self.bio_metrics = self.hparams.BIO_computer()
+            self.bio_metrics = F1Score(task="multiclass", num_classes=5, ignore_index=0).to(self.device)
             self.stage_wer_details = []
 
     def on_stage_end(self, stage, stage_loss, epoch):
@@ -678,6 +789,12 @@ class ASR(sb.core.Brain):
         else:
             stage_stats["CER"] = self.cer_metric.summarize("error_rate")
             stage_stats["WER"] = self.wer_metric.summarize("error_rate")
+          # stage_stats["F1_BIO"] = self.bio_metrics.summarize()["F-score"]
+
+            stage_stats["F1_BIO"] = self.bio_metrics.compute() * 100
+            self.bio_preds = []
+            self.bio_gold = []
+
             # Activate syntax module for training once ASR is good enough
             if self.is_training_syntax:
                 if stage == sb.Stage.VALID:
@@ -690,8 +807,8 @@ class ASR(sb.core.Brain):
                     goldPath_CoNLLU = self.hparams.test_gold_conllu
                     alig_file = self.hparams.alig_path + "_test"
                     order = self.test_order
-                print(self.hparams.evaluator.decoded_sentences)
-                print(order)
+                #print(self.hparams.evaluator.decoded_sentences)
+                #print(order)
                 self.hparams.evaluator.writeToCoNLLU(st, order)
 
                 # write accumulated wer_details.
@@ -702,7 +819,7 @@ class ASR(sb.core.Brain):
                     print_alignments(self.stage_wer_details, file=f_out)
 
                 metrics_dict = self.hparams.evaluator.evaluateCoNLLU(
-                    goldPath_CoNLLU, st, alig_file
+                    goldPath_CoNLLU, st, alig_file, gold_segmentation=True
                 )
                 stage_stats["LAS"] = metrics_dict["LAS"].f1 * 100
                 stage_stats["UAS"] = metrics_dict["UAS"].f1 * 100
@@ -886,7 +1003,10 @@ def dataio_prepare(hparams, tokenizer):
         replacements={"data_root": data_folder},
     )
     # We also sort the validation data so it is faster to validate
-    valid_data = valid_data.filtered_sorted(sort_key="duration")
+    if hparams["sorting"] == "ascending":
+        valid_data = valid_data.filtered_sorted(sort_key="duration")
+    elif hparams["sorting"] == "descending":
+        valid_data = valid_data.filtered_sorted(sort_key="duration", reverse = True)
 
     test_data = sb.dataio.dataset.DynamicItemDataset.from_csv(
         csv_path=hparams["test_csv"],
@@ -1015,12 +1135,35 @@ def dataio_prepare(hparams, tokenizer):
             )
             raise TypeError() from e
         # second task is dependency type
+
+        #print([label_alphabet[1].get(fl.split("{}")[1]) for fl in fullLabel])
+        #print(fullLabel)
+        #print([fl.split("{}")[1] for fl in fullLabel])
+
         depDep2Label = torch.LongTensor(
-            [label_alphabet[1].get(fl.split("{}")[1]) for fl in fullLabel]
+            [label_alphabet[1].get(fl.split("{}")[1].lower()) for fl in fullLabel]
         )
         yield depDep2Label
 
     sb.dataio.dataset.add_dynamic_item(datasets, dep2label_pipeline)
+    
+    
+    @sb.utils.data_pipeline.takes("start_word", "end_word")
+    @sb.utils.data_pipeline.provides(
+        "start_words", "end_words"
+    )
+    def BIO_pipeline(start_word, end_word): 
+        # we remove the first value (begin) to each value
+        # since the timestamp is for the whole file in Orfeo and not the segment
+        # Note, small bias since the first frame will always be a B followed by a few I
+        start_word = start_word.split(" ")
+        begin_time = float(start_word[0])
+        start_words =  torch.tensor([float(x) - begin_time for x in start_word])
+        yield start_words
+        end_words =  torch.tensor([float(x) - begin_time for x in end_word.split(" ")])
+        yield end_words
+
+    sb.dataio.dataset.add_dynamic_item(datasets, BIO_pipeline)
 
     # 4. Set output:
     sb.dataio.dataset.set_output_keys(
@@ -1035,6 +1178,8 @@ def dataio_prepare(hparams, tokenizer):
             "pos_tensor",
             "govDep2label",
             "depDep2Label",
+            "start_words",
+            "end_words"
         ],
     )
     return train_data, valid_data, test_data
@@ -1053,7 +1198,7 @@ def build_label_alphabet(path_encoded_train):
                 govLabel = labelSplit[0]
                 if govLabel not in label_gov:
                     label_gov[govLabel] = len(label_gov)
-                depLabel = labelSplit[-1].replace("\n", "")
+                depLabel = labelSplit[-1].replace("\n", "").lower()
                 if depLabel not in label_dep:
                     label_dep[depLabel] = len(label_dep)
                 pos = field[1]
@@ -1101,6 +1246,8 @@ if __name__ == "__main__":
     path_encoded_train = "all.seq"  # For alphabet generation
     label_alphabet = build_label_alphabet(path_encoded_train)
     reverse_label_alphabet = build_reverse_alphabet(label_alphabet)
+
+    print(reverse_label_alphabet[1])
     # Load hyperparameters file with command-line overrides
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
     with open(hparams_file) as fin:
@@ -1108,6 +1255,12 @@ if __name__ == "__main__":
 
     goldPath_CoNLLU_dev = hparams["dev_gold_conllu"]
     goldPath_CoNLLU_test = hparams["test_gold_conllu"]
+
+    BIO_dict = {"<start>":0,
+                "begin": 1,
+                "inside": 2,
+                "outside": 3,
+                "<end>": 4}
 
     # If distributed_launch=True then
     # create ddp_group with the right communication protocol
@@ -1201,7 +1354,6 @@ if __name__ == "__main__":
     )
 
     # transcribe
-    '''
     run_on_main(
         asr_brain.transcribe_dataset,
         kwargs={
@@ -1210,9 +1362,10 @@ if __name__ == "__main__":
             "loader_kwargs": hparams["test_dataloader_options"],
         },
     )
+    """
     asr_brain.transcribe_dataset(
         dataset=test_data,  # Must be obtained from the dataio_function
         min_key="WER",
         loader_kwargs=hparams["test_dataloader_options"],
     )
-    '''
+    """

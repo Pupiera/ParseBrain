@@ -7,7 +7,7 @@
 # Seed needs to be set at top of yaml, before objects with parameters are made
 seed: 1234
 __set_seed: !!python/object/apply:torch.manual_seed [!ref <seed>]
-output_folder: !ref results/wav2vec2_ctc_FR_AUDIO/<seed>
+output_folder: !ref results/wav2vec2_ctc_FR_AUDIO_BIO/<seed>
 wer_file: !ref <output_folder>/wer.txt
 save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
@@ -46,7 +46,8 @@ number_of_ctc_epochs: 15
 lr: 1.0
 lr_wav2vec: 0.0001
 ctc_weight: 0.3
-sorting: ascending
+  #sorting: ascending
+sorting: descending
 auto_mix_prec: False
 sample_rate: 16000
 ckpt_interval_minutes: 30 # save checkpoint every N min
@@ -77,6 +78,8 @@ dec_neurons: 1024
 freeze_wav2vec: False
 
 # Outputs
+
+ASR_weight: 0.5
 output_neurons: 76  # BPE size, index(blank/eos/bos) = 0
 
 # Decoding parameters
@@ -112,29 +115,69 @@ RepFusionModel: !new:speechbrain.nnet.RNN.LSTM
 # DEP2LABEL
 #
 input_size: !ref <repFusionHidden> #* !ref <repFusionBidirectional>+1
-dep2LabelHidden: 800
+dep2LabelHidden: 768
 output_neuronsDep: 19 #Nb Label of dep
 output_neuronsGov: 846 #Nb label of Gov + relPos
 output_neuronsPOS: 23 #Nb different POS
 dep2LabelFeat: !new:speechbrain.nnet.RNN.LSTM
     input_shape: [null,null, !ref <input_size>]
     hidden_size: !ref <dep2LabelHidden>
-    num_layers: 2
+    num_layers: 3
     bias: True
     dropout: 0.5
     bidirectional: True
 
-depDep2Label: !new:speechbrain.nnet.linear.Linear
-    input_size: !ref <dep2LabelHidden>*2
+
+depDep2Label: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, !ref <dep2LabelHidden> * 2 ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.50
+  linear_head: !name:speechbrain.nnet.linear.Linear
     n_neurons: !ref <output_neuronsDep>
+    bias: True
 
-govDep2Label: !new:speechbrain.nnet.linear.Linear
-    input_size:  !ref <dep2LabelHidden>*2
+    #depDep2Label: !new:speechbrain.nnet.linear.Linear
+    #input_size: !ref <dep2LabelHidden>*2
+    #n_neurons: !ref <output_neuronsDep>
+
+govDep2Label: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, !ref <dep2LabelHidden> * 2 ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.50
+  linear_head: !name:speechbrain.nnet.linear.Linear
     n_neurons: !ref <output_neuronsGov>
+    bias: True
 
-posDep2Label: !new:speechbrain.nnet.linear.Linear
-    input_size:  !ref <dep2LabelHidden>*2
+    #govDep2Label: !new:speechbrain.nnet.linear.Linear
+    #input_size:  !ref <dep2LabelHidden>*2
+    #n_neurons: !ref <output_neuronsGov>
+
+posDep2Label: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, !ref <dep2LabelHidden> * 2 ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.50
+  linear_head: !name:speechbrain.nnet.linear.Linear
     n_neurons: !ref <output_neuronsPOS>
+    bias: True
+
+    #posDep2Label: !new:speechbrain.nnet.linear.Linear
+    #input_size:  !ref <dep2LabelHidden>*2
+    #n_neurons: !ref <output_neuronsPOS>
 
 #
 # Functions and classes
@@ -213,6 +256,7 @@ modules:
     wav2vec2: !ref <wav2vec2>
     enc: !ref <enc>
     ctc_lin: !ref <ctc_lin>
+    bio_crf: !ref <bio_crf>
     RepFusionModel: !ref <RepFusionModel>
     dep2LabelFeat : !ref <dep2LabelFeat>
     depDep2Label: !ref <depDep2Label>
@@ -221,7 +265,7 @@ modules:
 
 
 model: !new:torch.nn.ModuleList
-    - [!ref <enc>, !ref <ctc_lin>, !ref <RepFusionModel>, !ref <dep2LabelFeat>,
+    - [!ref <enc>, !ref <ctc_lin>, !ref <bio_crf>,!ref <RepFusionModel>, !ref <dep2LabelFeat>,
        !ref <posDep2Label>, !ref <depDep2Label>, !ref <govDep2Label>]
 
 model_opt_class: !name:torch.optim.Adadelta
@@ -256,6 +300,8 @@ checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
 train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
     save_file: !ref <train_log>
 
+
+
 #train_logger: !new:speechbrain.utils.train_logger.WandBLogger
 #        yaml_config: hparams/logger.yaml
 
@@ -270,6 +316,7 @@ cer_computer: !name:speechbrain.utils.metric_stats.ErrorRateStats
 dep2Label_computer: !name:speechbrain.utils.metric_stats.BinaryMetricStats
 
 gov2Label_computer: !name:speechbrain.utils.metric_stats.BinaryMetricStats
+BIO_computer: !name:speechbrain.utils.metric_stats.BinaryMetricStats
 
 #
 # PARSING ARCHI
@@ -286,6 +333,28 @@ evaluator: !new:parsebrain.processing.dependency_parsing.sequence_labeling.encod
     eval_st: !ref <eval_st>
 
 encoding: !new:parsebrain.processing.dependency_parsing.sequence_labeling.encoding.RelPosEncoding
+
+
+#
+## IOB ARCHI IOB + <start>, <end>
+#
+
+
+BIO_weight: 0.5
+
+  #bio_loss: !name:speechbrain.nnet.losses.nll_loss
+
+  #bio_lin:  !new:speechbrain.nnet.linear.Linear
+  #input_size: !ref <dnn_neurons>
+  #n_neurons: 5
+
+bio_loss : !new:parsebrain.nnet.ViterbiLoss
+
+bio_crf: !new:parsebrain.nnet.CRF
+  hidden_dim: !ref <dnn_neurons>
+  tagset_size: 5
+
+bio_decoder: !new:parsebrain.decoders.ViterbiDecoder
 
 #
 ## File path

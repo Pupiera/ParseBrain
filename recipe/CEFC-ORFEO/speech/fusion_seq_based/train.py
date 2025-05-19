@@ -79,36 +79,64 @@ class ASR(sb.core.Brain):
 
         """
         batch = batch.to(self.device)
+
         wavs, wav_lens = batch.sig
         tokens_bos, _ = batch.tokens_bos
+        pos_eos, _ = batch.pos_eos
+        gov_eos, _ = batch.gov_eos
+        dep_eos, _ = batch.dep_eos
+
         wavs, wav_lens = wavs.to(self.device), wav_lens.to(self.device)
         if stage == sb.Stage.TRAIN:
             if hasattr(self.hparams, "augmentation"):
                 wavs = self.hparams.augmentation(wavs, wav_lens)
 
         # Forward pass ASR
-
         feats = self.modules.wav2vec2(wavs)
-        
-        if hasattr(self.hparams, "syntax_layers"):
-            x_syntax = feats[int(self.hparams.syntax_layers)]
-            feats = feats[-1]
-
-
         x = self.modules.enc(feats)  # [batch,time,1024]
         logits = self.modules.ctc_lin(x)  # [batch,time,76]
         # [batch,time,76] (76 in output neurons corresponding to BPE size)
         p_ctc = self.hparams.log_softmax(logits)
+        # Use BOS syntactic information if we condition on previous word, use without bos if we condition on the predictions of
+        # the current word. Pronbably more pertinent with current word, so no pos but <eos> instead.
         # Forward pass dependency parsing
-        result = {"p_ctc": p_ctc, "wav_lens": wav_lens}
+        # [ batch, subwords, dim]
+        seq_emb = self.hparams.emb_asr(tokens_bos)
+        pos_emb = self.hparams.pos_emb(pos_eos)
+        gov_emb = self.hparams.gov_emb(gov_eos)
+        dep_emb = self.hparams.dep_emb(dep_eos)
+        # [batch, words, dim*3]
+        synt_emb = torch.cat((pos_emb, gov_emb, dep_emb), dim=-1)
+        batch_size = feats.size(0)
+        max_word_len = synt_emb.size(1)
+        max_seq_len = seq_emb.size(1)
+
+        # not this easy for the teacher forcing, because shape synt_emb != seq_emb
+        # need to give same syntaxic emb to the same word even if it's divised in subword.
+
+        aligned_emb = torch.zeros(
+            (batch_size, max_seq_len, synt_emb.size(-1)), device=self.device
+        )
+        # if bos take full subword_count, else take it without the first element. [1:]
+        subword_count, _ = batch.subword_count_bos
+        for i in range(batch_size):
+            for j in range(max_word_len):
+                if subword_count[i][j].item() == 0:
+                    continue
+                start_index = sum(subword_count[i][:j])
+                end_index = start_index + subword_count[i][j]
+                # synt_emb [1,1,dim]
+                word_emb = synt_emb[i, j, :]
+                # [subword(j), dim]
+                repeated_word_emb = word_emb.repeat(subword_count[i][j], 1)
+                aligned_emb[i, start_index:end_index, :] = repeated_word_emb
+        syntax_emb = torch.cat((seq_emb, aligned_emb), dim=-1)
+        logits_seq, attn = self.modules.seqdec(syntax_emb, x, wav_lens)
+        p_seq_tf = self.hparams.log_softmax(logits_seq)
+        result = {"p_ctc": p_ctc, "wav_lens": wav_lens, "p_seq_tf": p_seq_tf}
+
         if self.is_training_syntax:
-            sequence, mapFrameToWord = ctc_greedy_decode(
-                p_ctc, wav_lens, blank_id=self.hparams.blank_index
-            )
-            if hasattr(self.hparams, "syntax_layers"):
-                input_dep, seq_len = self._create_inputDep(x_syntax, mapFrameToWord)
-            else:
-                input_dep, seq_len = self._create_inputDep(x, mapFrameToWord)
+            input_dep, seq_len = self.hparams.word_speech_rep(x)
             input_dep = input_dep.to(self.device)
             seq_len = seq_len.to(self.device)
             batch_len = input_dep.shape[0]
@@ -122,68 +150,48 @@ class ASR(sb.core.Brain):
             p_depLabel = self.hparams.log_softmax(logits_depLabel)
             logits_govLabel = self.modules.govDep2Label(lstm_out)
             p_govLabel = self.hparams.log_softmax(logits_govLabel)
+            # Greedy search for seq2seq to get ASR for syntax oracle.
+
+            pred_gov = torch.argmax(p_govLabel)
+            pred_dep = torch.argmax(p_depLabel)
+            pred_pos = torch.argmax(p_posLabel)
+            # Add eos to each element
+            pred_gov = torch.cat(
+                (pred_gov, torch.ones((batch, 1) * hparams["gov_eos"])), dim=1
+            )
+            pred_dep = torch.cat(
+                (pred_dep, torch.ones((batch, 1) * hparams["dep_eos"])), dim=1
+            )
+            pred_pos = torch.cat(
+                (pred_pos, torch.ones((batch, 1) * hparams["pos_eos"])), dim=1
+            )
+            # Get embedding from predictions
+            pos_emb = self.hparams.pos_emb(pred_pos)
+            gov_emb = self.hparams.gov_emb(pred_gov)
+            dep_emb = self.hparams.dep_emb(pred_dep)
             result_parsing = {
                 "p_posLabel": p_posLabel,
                 "p_depLabel": p_depLabel,
                 "p_govLabel": p_govLabel,
                 "seq_len": seq_len,
             }
+            synt_emb = torch.cat((pos_emb, gov_emb, dep_emb), dim=-1)
+            if stage == sb.Stage.TRAIN:
+                logits_seq_greedy, attn = self.hparams.greedy_search(
+                    synt_emb, x, wav_lens
+                )
+                p_tokens_greedy, score = self.hparams.log_softmax(logits_seq_greedy)
+                result["p_tokens"] = p_tokens_greedy
             result = {**result, **result_parsing}
+        # if in dev or test, do beam search.
+        if stage != sb.Stage.TRAIN:
+            # beam search
+            # If training syntax, use the predictions else use teacher forcing (on syntax)
+            # synt emb is either the teacher forcing one, or the same than for the greedy search.
+            p_tokens, score = self.hparams.beam_searcher(synt_emb, x, wav_lens)
+            # Override the greedy search
+            result["p_tokens"] = p_tokens
         return result
-
-    def _create_inputDep(self, x, mapFrameToWord):
-        """
-        Compute the word audio embedding
-        Parameters
-        ----------
-        x : The encoder representation output ( 1 frame per 20ms with wav2vec )
-        mapFrameToWord : The mapping of frame to word from the CTC module.
-
-        Returns
-        batch : The padded batch of word audio embedding [batch, max(seq_len)]
-        seq_len : the length of each element of the batch
-        -------
-
-        """
-        batch = []
-        hidden_size = self.hparams.repFusionHidden
-        is_bidirectional = self.hparams.repFusionBidirectional
-        n_layers = self.hparams.repFusionLayers
-        nb_hidden = n_layers * (1 + is_bidirectional)
-        for i, (rep, map) in enumerate(
-            zip(x, mapFrameToWord)
-        ):  # for 1 element on the batch do :
-            map = torch.Tensor(map)
-            uniq = torch.unique(map)
-            fusionedRep = []
-            # init hidden to zeros for each sentence
-            hidden = torch.zeros(nb_hidden, 1, hidden_size, device=self.device)
-            # init hidden to zeros for each sentence
-            cell = torch.zeros(nb_hidden, 1, hidden_size, device=self.device)
-            # For each word find the limit of the relevant sequence of frames
-            for e in uniq:
-                # ignore 0, if empty tensor, try with everything (i.e correspond to transition of words)
-                if e.item() == 0 and len(uniq) > 1:
-                    continue
-                relevant_column = (map == e).nonzero(as_tuple=False)
-                min = torch.min(relevant_column)
-                max = torch.max(relevant_column)
-                # should not break autograd https://discuss.pytorch.org/t/select-columns-from-a-batch-of-matrices-by-index/85321/3
-                frames = rep[min : max + 1, :].unsqueeze(0)
-                # extract feature from all the relevant audio frame representation
-                _, (hidden, cell) = self.modules.RepFusionModel(frames, (hidden, cell))
-                if is_bidirectional:
-                    fusionedRep.append(torch.cat((hidden[-2], hidden[-1]), dim=1))
-                else:
-                    fusionedRep.append(hidden[-1])
-            batch.append(torch.stack(fusionedRep))
-            # print(f"Last tensor shape : {batch[-1].shape}")
-        seq_len = [len(e) for e in batch]
-        batch = torch.reshape(
-            pad_sequence(batch, batch_first=True),
-            (len(mapFrameToWord), -1, hidden_size * (1 + is_bidirectional)),
-        )
-        return batch, torch.Tensor(seq_len)
 
     def compute_objectives_syntax(
         self, predicted_words, p_depLabel, p_govLabel, p_posLabel, seq_len, batch
@@ -270,15 +278,24 @@ class ASR(sb.core.Brain):
         ids = batch.id
 
         tokens, tokens_lens = batch.tokens
+        tokens_eos, tokens_eos_lens = batch.tokens_eos
         loss = self.hparams.ctc_cost(
             predictions["p_ctc"], tokens, predictions["wav_lens"], tokens_lens
         )
+        loss_seq = self.hparams.seq_cost(
+            predictions["p_seq_tf"], tokens_eos, length=tokens_eos_lens
+        )
+        loss += loss_seq
         if self.is_training_syntax:
+            # the sequence can't be from the ctc.
+            """
             sequence = sb.decoders.ctc_greedy_decode(
                 predictions["p_ctc"],
                 predictions["wav_lens"],
                 blank_id=self.hparams.blank_index,
             )
+            """
+            sequence = predictions["p_tokens"]
             predicted_words = self.tokenizer(sequence, task="decode_from_list")
             for i, sent in enumerate(predicted_words):
                 for w in sent:
@@ -303,11 +320,14 @@ class ASR(sb.core.Brain):
         if sb.Stage.TRAIN != stage:
             # need to get predicted words
             if not self.is_training_syntax:
+                """
                 sequence = sb.decoders.ctc_greedy_decode(
                     predictions["p_ctc"],
                     predictions["wav_lens"],
                     blank_id=self.hparams.blank_index,
                 )
+                """
+                sequence = predictions["p_tokens"]
                 predicted_words = self.tokenizer(sequence, task="decode_from_list")
                 for i, sent in enumerate(predicted_words):
                     for w in sent:
@@ -690,8 +710,6 @@ class ASR(sb.core.Brain):
                     goldPath_CoNLLU = self.hparams.test_gold_conllu
                     alig_file = self.hparams.alig_path + "_test"
                     order = self.test_order
-                print(self.hparams.evaluator.decoded_sentences)
-                print(order)
                 self.hparams.evaluator.writeToCoNLLU(st, order)
 
                 # write accumulated wer_details.
@@ -759,6 +777,8 @@ class ASR(sb.core.Brain):
                     },
                     min_keys=["WER"],
                 )
+            with open(self.hparams.wer_file_valid, "w") as w:
+                self.wer_metric.write_stats(w)
         elif stage == sb.Stage.TEST:
             self.hparams.train_logger.log_stats(
                 stats_meta={"Epoch loaded": self.hparams.epoch_counter.current},
@@ -926,7 +946,7 @@ def dataio_prepare(hparams, tokenizer):
     # 3. Define text pipeline:
     @sb.utils.data_pipeline.takes("wrd")
     @sb.utils.data_pipeline.provides(
-        "tokens_list", "tokens_bos", "tokens_eos", "tokens"
+        "tokens_list", "tokens_bos", "tokens_eos", "tokens", "subword_count_bos"
     )
     def text_pipeline(wrd):
         """
@@ -951,6 +971,10 @@ def dataio_prepare(hparams, tokenizer):
         yield tokens_eos
         tokens = torch.LongTensor(tokens_list)
         yield tokens
+        subword_bos_len = [1] + [
+            len(tokenizer.sp.encode_as_ids(w)) for w in wrd.split(" ")
+        ]
+        yield torch.LongTensor(subword_bos_len)
 
     sb.dataio.dataset.add_dynamic_item(datasets, text_pipeline)
 
@@ -958,7 +982,16 @@ def dataio_prepare(hparams, tokenizer):
 
     @sb.utils.data_pipeline.takes("wrd", "pos", "gov", "dep")
     @sb.utils.data_pipeline.provides(
-        "wrd", "pos_tensor", "govDep2label", "depDep2Label"
+        "wrd",
+        "pos_tensor",
+        "pos_bos",
+        "pos_eos",
+        "govDep2label",
+        "gov_bos",
+        "gov_eos",
+        "depDep2Label",
+        "dep_bos",
+        "dep_eos",
     )
     def dep2label_pipeline(wrd, poss, gov, dep):
         """
@@ -981,14 +1014,15 @@ def dataio_prepare(hparams, tokenizer):
         yield wrd
         # 3 task is POS tagging
         try:
-            pos_list = torch.LongTensor(
-                [label_alphabet[2].get(p) for p in poss.split(" ")]
-            )
+            pos_list = [label_alphabet[2].get(p) for p in poss.split(" ")]
         except TypeError:
             print(wrd)
             print(poss)
             print([label_alphabet[2].get(p) for p in poss.split(" ")])
-        yield pos_list
+        yield torch.LongTensor(pos_list)
+        yield torch.LongTensor([hparams["pos_bos"]] + pos_list)
+        yield torch.LongTensor(pos_list + [hparams["pos_eos"]])
+
         fullLabel = encoding.encodeFromList(
             [w for w in wrd.split(" ")],
             [p for p in poss.split(" ")],
@@ -997,13 +1031,14 @@ def dataio_prepare(hparams, tokenizer):
         )
         # first task is gov pos and relative position
         try:
-            govDep2label = torch.LongTensor(
-                [
-                    label_alphabet[0].get(fl.split("\t")[-1].split("{}")[0])
-                    for fl in fullLabel
-                ]
-            )
-            yield govDep2label
+            gov_list = [
+                label_alphabet[0].get(fl.split("\t")[-1].split("{}")[0])
+                for fl in fullLabel
+            ]
+            yield torch.LongTensor(gov_list)
+            yield torch.LongTensor([hparams["gov_bos"]] + gov_list)
+            yield torch.LongTensor(gov_list + [hparams["gov_eos"]])
+
         except TypeError as e:
             print(wrd)
             print([fl.split("\t")[-1].split("{}")[0] for fl in fullLabel])
@@ -1015,10 +1050,10 @@ def dataio_prepare(hparams, tokenizer):
             )
             raise TypeError() from e
         # second task is dependency type
-        depDep2Label = torch.LongTensor(
-            [label_alphabet[1].get(fl.split("{}")[1]) for fl in fullLabel]
-        )
-        yield depDep2Label
+        dep_list = [label_alphabet[1].get(fl.split("{}")[1]) for fl in fullLabel]
+        yield torch.LongTensor(dep_list)
+        yield torch.LongTensor([hparams["dep_bos"]] + dep_list)
+        yield torch.LongTensor(dep_list + [hparams["dep_eos"]])
 
     sb.dataio.dataset.add_dynamic_item(datasets, dep2label_pipeline)
 
@@ -1031,10 +1066,17 @@ def dataio_prepare(hparams, tokenizer):
             "tokens_bos",
             "tokens_eos",
             "tokens",
+            "subword_count_bos",
             "wrd",
             "pos_tensor",
+            "pos_bos",
+            "pos_eos",
             "govDep2label",
+            "gov_bos",
+            "gov_eos",
             "depDep2Label",
+            "dep_bos",
+            "dep_eos",
         ],
     )
     return train_data, valid_data, test_data
@@ -1093,6 +1135,18 @@ def build_reverse_alphabet(alphabet):
     for alpha in alphabet:
         reverse.append({item: key for (key, item) in alpha.items()})
     return reverse
+
+
+def get_final_subtokens(tokenizer):
+    num_subtokens = tokenizer.sp.get_piece_size()
+    final_subtokens = []
+    for i in range(num_subtokens):
+        sub_tok = tokenizer.sp.id_to_piece(i)
+        print(sub_tok)
+        if "▁" in sub_tok:
+            print(f"added {i}")
+            final_subtokens.append(i)
+    return final_subtokens
 
 
 if __name__ == "__main__":
@@ -1170,6 +1224,10 @@ if __name__ == "__main__":
     asr_brain.test_order = get_id_from_CoNLLfile(hparams["test_gold_conllu"])
     encoding = asr_brain.hparams.encoding
     asr_brain.optimizer_step_limit = None
+
+    list_final_subtokens = get_final_subtokens(tokenizer)
+    asr_brain.hparams.beam_searcher.set_list_final_subtoken(list_final_subtokens)
+    asr_brain.hparams.greedy_search.set_list_final_subtoken(list_final_subtokens)
     # Training
     try:
         asr_brain.fit(
@@ -1201,7 +1259,6 @@ if __name__ == "__main__":
     )
 
     # transcribe
-    '''
     run_on_main(
         asr_brain.transcribe_dataset,
         kwargs={
@@ -1210,9 +1267,10 @@ if __name__ == "__main__":
             "loader_kwargs": hparams["test_dataloader_options"],
         },
     )
+    """
     asr_brain.transcribe_dataset(
         dataset=test_data,  # Must be obtained from the dataio_function
         min_key="WER",
         loader_kwargs=hparams["test_dataloader_options"],
     )
-    '''
+    """
