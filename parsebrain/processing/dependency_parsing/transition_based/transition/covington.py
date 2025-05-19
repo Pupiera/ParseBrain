@@ -12,6 +12,8 @@ from parsebrain.processing.dependency_parsing.transition_based.transition.arc im
     RightArc,
 )
 
+from itertools import chain
+
 
 class CovingtonTransition(Transition):
     SHIFT = 0
@@ -45,13 +47,21 @@ class CovingtonTransition(Transition):
         elif not config.has_root:
             stack = config.root.squeeze()
         else:
-            device = config.buffer[0].device
-            stack = torch.zeros(config.buffer[0].size()).to(device)
+            if len(config.buffer) >1:
+                device = config.buffer[0].device
+                size = config.buffer[0].size()
+            elif len(config.stack2) >1:
+                device = config.stack2[0].device
+                size = config.stack2[0].size()
+            stack = torch.zeros(size).to(device)
         if len(config.buffer) > 0:
             buffer = config.buffer[0]
-        else:
+        elif len(config.stack) >0:
             device = config.stack[0].device
             buffer = torch.zeros(config.stack[0].size()).to(device)
+        else:
+            device = config.stack2[0].device
+            buffer = torch.zeros(config.stack2[0].size()).to(device)
         if decision == self.RIGHT:
             return stack, buffer
         elif decision == self.LEFT:
@@ -89,30 +99,80 @@ class CovingtonTransition(Transition):
         elif decision == self.RIGHT:
             return self.right_arc(config)
         else:
-            raise ValueError(
-                f"Decision number ({decision}) is out of scope for covington transition"
-            )
+            # ToDo: add default behavior, link to current root.
+            #import pudb; pudb.set_trace()
+            return self.create_arc_to_root(config)
+        
+
+    def create_arc_to_root(self, config):
+        # 1. check if blocking element is on buffer or stack
+        if len(config.stack_string)>=1 and not CovingtonTransition.has_head(config.stack_string[-1], config.arc):
+            w_to_get_head = config.stack_string.pop()
+            wi = config.stack.pop()
+            if config.has_root:
+                w_root = self.get_head_root(config)
+                try:
+                    config.arc.append(LeftArc(head=w_root, dependent=w_to_get_head))
+                except AttributeError as e:
+                    import pudb; pudb.set_trace()
+                    raise e
+            else:
+                wi_string = config.root_token
+                config.arc.append(RightArc(head=wi_string, dependent=w_to_get_head))
+                config.has_root = True
+            config.stack2.insert(0, wi)
+            config.stack2_string.insert(0, w_to_get_head)
+        elif len(config.buffer_string)>=1 and not CovingtonTransition.has_head(config.buffer_string[0], config.arc):
+            w_to_get_head = config.buffer_string[0]
+            wi = config.buffer[0]
+            config.shift_buffer()
+            if config.has_root:
+                wi_string = self.get_head_root(config)
+            else:
+                wi_string = config.root_token
+                config.has_root = True
+
+            config.arc.append(RightArc(head=wi_string, dependent=w_to_get_head))            
+        return config
+
+
+    def get_head_root(self, config):
+        for arc in config.arc:
+            if arc.head.position ==0:
+                return arc.dependent
 
     @staticmethod
     def is_terminal(config: Configuration) -> bool:
-        return len(config.buffer_string) == 0
+        if len(config.buffer_string) >1:
+            return False
+        if len(config.buffer_string) == 0:
+            return True
+        if CovingtonTransition.has_head(config.buffer_string[0], config.arc):
+            # just missing the root transition, will be on the last missing one in the stack
+            if not config.has_root and CovingtonTransition.count_stack_no_head(config) ==1:
+                return True
+            if config.has_root and CovingtonTransition.count_stack_no_head(config) == 0:
+                return True
+        return False
+        #return len(config.buffer_string) == 0
 
     def update_tree(self, decision: int, config: Configuration, tree: dict) -> dict:
         pass
 
     def require_label(self, decision: int) -> bool:
-        return decision in [self.RIGHT, self.LEFT]
+        return decision in [self.RIGHT, self.LEFT, -1]
 
     @staticmethod
     def shift_condition(config):
         if len(config.buffer_string) == 0:
             return False
-        if len(config.buffer_string) > 1:
+        if len(config.buffer_string) >= 2:
             return True
+        # case where len(config.buffer_string) == 1
         wi = config.buffer_string[0]
         # if last shift, need to have a head (won't be able to get it after the shift...)
         # and CovingtonTransition.all_stack_has_head(config):
-        if CovingtonTransition.has_head(wi, config.arc):
+        if CovingtonTransition.has_head(wi, config.arc) and CovingtonTransition.all_stack_has_head(config):
             return True
         else:
             return False
@@ -128,6 +188,15 @@ class CovingtonTransition(Transition):
             if not CovingtonTransition.has_head(w, config.arc):
                 return False
         return True
+    
+    @staticmethod
+    def count_stack_no_head(config):
+        count = 0
+        for w in config.stack_string:
+            if not CovingtonTransition.has_head(w, config.arc):
+                count+=1
+        return count
+
 
     @staticmethod
     def shift(config: Configuration):
@@ -268,7 +337,18 @@ class CovingtonTransition(Transition):
             head=wi_string, dependent=wj_string, arcs=config.arc
         ):
             return False
+        if len(config.buffer_string) ==1 and CovingtonTransition.count_number_word_with_no_head(config) == 1 and not config.has_root:
+            return True
+
+        if len(config.buffer_string) ==1 and not CovingtonTransition.has_head(wi_string, config.arc):
+            return False
+
         return True
+    
+    @staticmethod
+    def count_number_word_with_no_head(config):
+        return sum([not CovingtonTransition.has_head(x, config.arc) for x in chain(config.buffer_string, config.stack_string, config.stack2_string)])
+
 
     @staticmethod
     def right_arc(config):
@@ -322,12 +402,18 @@ class CovingtonTransition(Transition):
             and not CovingtonTransition.has_head(config.buffer_string[0], config.arc)
         ):
             return False
+        # case where we need to force left arc, if the element go to stack2 without a head now, it will never have one since it can't go back into stack1
+        if (len(config.buffer_string) == 1 
+        and len(config.stack_string)>=1 
+        and not CovingtonTransition.has_head(config.stack_string[-1], config.arc)):
+            return False
+
         return len(config.stack_string) >= 1
 
     @staticmethod
     def no_arc(config):
         """
-
+        〈λ1|i, λ2, B, A〉 ⇒ 〈λ1, i|λ2, B, A〉
         @param config:
         @return:
         >>> from parsebrain.processing.dependency_parsing.transition_based.configuration import Word

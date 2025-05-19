@@ -240,7 +240,7 @@ class UDWord:
         # Let's ignore language-specific deprel subtypes.
         self.columns[DEPREL] = columns[DEPREL].split(":")[0]
         # Precompute which deprels are CONTENT_DEPRELS and which FUNCTIONAL_DEPRELS
-        self.is_content_deprel = self.columns[DEPREL].lower() in CONTENT_DEPRELS
+        self.is_content_deprel = self.columns[DEPREL] in CONTENT_DEPRELS
         self.is_functional_deprel = self.columns[DEPREL] in FUNCTIONAL_DEPRELS
 
 
@@ -329,10 +329,6 @@ def load_conllu(file):
                         word.parent = "remapping"
                         process_word(parent)
                         word.parent = parent
-                        '''
-                        if word.parent == "remapping":
-                            arise UDError("Theer is a cycle in a sentence")
-                        '''
 
             for word in ud.words[sentence_start:]:
                 try:
@@ -436,11 +432,10 @@ def load_conllu(file):
 
 # Evaluate the gold and system treebanks (loaded using load_conllu).
 class Evaluator:
-    def __init__(self, gold_ud, system_ud, alignement_smgl, gold_segmentation):
+    def __init__(self, gold_ud, system_ud, alignement_smgl):
         self.gold_ud = gold_ud
         self.system_ud = system_ud
         self.alignement_smgl = alignement_smgl
-        self.alignment_needed = not gold_segmentation
 
     def spans_score(self, gold_spans, system_spans):
         correct, gi, si = 0, 0, 0
@@ -637,7 +632,7 @@ class Evaluator:
 
     def align_words(self, gold_words, system_words):
         alignment = Alignment(gold_words, system_words)
-        '''
+
         gi, si = 0, 0
         while gi < len(gold_words) and si < len(system_words):
             if gold_words[gi].is_multiword or system_words[si].is_multiword:
@@ -678,11 +673,7 @@ class Evaluator:
                     gi += 1
                 else:
                     si += 1
-        '''
-        
-        for gold_word, sys_word in zip(gold_words, system_words):
-            alignment.append_aligned_words(gold_word, sys_word)
-        
+
         return alignment
 
     def align_words_ASR(self, gold_words, system_words, smgl_alignment):
@@ -701,18 +692,17 @@ class Evaluator:
         -------
 
         """
-        #print(f"gold len : {len(gold_words)}")
-        #print(f"system len : {len(system_words)}")
+        print(f"gold len : {len(gold_words)}")
+        print(f"system len : {len(system_words)}")
         count_C_S = 0
         count_D = 0
         count_I = 0
         s_len = len(system_words)
         g_len = len(gold_words)
-        #print("####")
-        #print(f"align len : {len(smgl_alignment)}")
+        print("####")
+        print(f"align len : {len(smgl_alignment)}")
         for i in range(len(smgl_alignment)):
             smgl_token = smgl_alignment[i]
-            #print(f"alignment token : {smgl_token} at index {i}")
             # if correct or substitued token (misspeling,..) then alignement is good
             if smgl_token.type == "C" or smgl_token.type == "S":
                 count_C_S += 1
@@ -720,6 +710,7 @@ class Evaluator:
             # Missing token in pred, add dummy to keep alignment between gold and sys
             if smgl_token.type == "D":
                 count_D += 1
+                '''
                 if i == 0:
                     index = 0
                 else:
@@ -760,47 +751,36 @@ class Evaluator:
                     # print([x.type for x in smgl_alignment])
                     print(f"C_S {count_C_S}, D {count_D}, I {count_I}")
                     raise IndexError()
+                '''
             # Added token in pred, add dummy to keep alignment between gold and sys
             if smgl_token.type == "I":
                 count_I += 1
+                '''
                 if i == 0:
                     index = 0
                 else:
                     index = i - 1
-                try:
-                    dummy_UD = [
-                        int(gold_words[index].columns[0]) + 1,
-                        "DUMMYG",
-                        "_",
-                        "DUMMYG",
-                        "_",
-                        "_",
-                        0,
-                        "DUMMYG",
-                        "_",
-                        "_",
-                    ]
-                    gold_words.insert(
-                        i,
-                        UDWord(
-                            UDSpan(gold_words[index].span.end, gold_words[index].span.end),
-                            dummy_UD,
-                            is_multiword=False,
-                        ),
-                    )
-                except IndexError:
-                    import pudb; pudb.set_trace()
-
-                    print(f"system lenght :{len(system_words)}")
-                    print(f"gold len {len(gold_words)}")
-                    print(f"alignment len : {len(smgl_alignment)}")
-                    print(index)
-                    # print([w.columns[1] for w in gold_words])
-                    # print("-----------------------")
-                    # print([w.columns[1] for w in system_words])
-                    # print([x.type for x in smgl_alignment])
-                    print(f"C_S {count_C_S}, D {count_D}, I {count_I}")
-                    raise IndexError()
+                dummy_UD = [
+                    int(gold_words[index].columns[0]) + 1,
+                    "DUMMYG",
+                    "_",
+                    "DUMMYG",
+                    "_",
+                    "_",
+                    0,
+                    "DUMMYG",
+                    "_",
+                    "_",
+                ]
+                gold_words.insert(
+                    i,
+                    UDWord(
+                        UDSpan(gold_words[index].span.end, gold_words[index].span.end),
+                        dummy_UD,
+                        is_multiword=False,
+                    ),
+                )
+                '''
         if len(gold_words) != len(system_words):
             #print([w.columns[1] for w in gold_words])
             #print([w.columns[1] for w in system_words])
@@ -833,12 +813,9 @@ class Evaluator:
         """
         # Align words
         # alignment = align_words(gold_ud.words, system_ud.words)
-        if self.alignment_needed:
-            alignment = self.align_words_ASR(
-                self.gold_ud.words, self.system_ud.words, self.alignement_smgl
-            )
-        else:
-            alignment = self.align_words(self.gold_ud.words, self.system_ud.words)
+        alignment = self.align_words_ASR(
+            self.gold_ud.words, self.system_ud.words, self.alignement_smgl
+        )
         sentence_score, token_score, seg_error_rate = self.spans_score_unaligned_tokens(
             self.gold_ud.sentences,
             self.system_ud.sentences,
@@ -1012,27 +989,24 @@ def load_speechbrain_alignment(file):
                 tok = SmglToken(type=a, ref=t, hyp=p)
                 aligned_token.append(tok)
             count = 0
-    #print(di)
-    #print(len(aligned_token))
+    print(di)
+    print(len(aligned_token))
     file.close()
     return aligned_token
 
 
-class SpeechEval:
+class FormlessSpeechEval:
     def evaluate_wrapper(self, args):
         # Load CoNLL-U files
-        #print("Loading gold")
+        print("Loading gold")
         gold_ud = load_conllu_file(args.gold_file)
-        #print(len(gold_ud.words))
-        #print("Loading system")
+        print(len(gold_ud.words))
+        print("Loading system")
         system_ud = load_conllu_file(args.system_file)
-        #print(len(system_ud.words))
+        print(len(system_ud.words))
         # trans_alignement = load_smgl_file(args.sgml_file)
         trans_alignment = load_speechbrain_file(args.alignment_file)
-
-        alignment_not_needed = args.gold_segmentation
-
-        eval = Evaluator(gold_ud, system_ud, trans_alignment, alignment_not_needed)
+        eval = Evaluator(gold_ud, system_ud, trans_alignment)
         return eval.evaluate()
 
 
@@ -1062,17 +1036,10 @@ def main():
         action="store_true",
         help="Print raw counts of correct/gold/system/aligned words instead of prec/rec/F1 for all metrics.",
     )
-    parser.add_argument(
-        "--gold_segmentation",
-        default=False,
-        action="store_true",
-        help="If set as true, the alignment with the provided alignement file wont be done, it assume that the two file are already aligned (with a gold segmentation)"
-    )
-
     args = parser.parse_args()
 
     # Evaluate
-    evaluator = SpeechEval()
+    evaluator = FormlessSpeechEval()
     evaluation = evaluator.evaluate_wrapper(args)
 
     # Print the evaluation

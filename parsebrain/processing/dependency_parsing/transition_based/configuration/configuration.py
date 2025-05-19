@@ -1,6 +1,5 @@
 from typing import List
 import torch
-from torch import Tensor
 
 
 class Configuration:
@@ -8,7 +7,7 @@ class Configuration:
         self,
         features: torch.Tensor,
         features_string: List["Word"],
-        root_embedding: torch.tensor,
+        root_embedding: torch.Tensor,
     ):
         self.buffer = features
         self.buffer_string = features_string
@@ -17,6 +16,7 @@ class Configuration:
         self.stack2 = []
         self.stack2_string = []
         self.arc = []
+        self.has_root = False
         # root until linked is as if there is already one element in the stack.
         if root_embedding is None:
             try:
@@ -26,7 +26,6 @@ class Configuration:
                 self.root = 0
         else:
             self.root = root_embedding
-        self.has_root = False
         # this value will be the value in one arc of the tree.
         self.root_token = Word("ROOT", 0)
 

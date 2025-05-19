@@ -31,9 +31,9 @@ class ReaderSpeechbrain(Reader):
         deps = []
         poss = []
         types = []
-        for alig, gov, dep, pos in zip(
+        for index_error ,(alig, gov, dep, pos) in enumerate(zip(
             alignment, original_gov, original_dep, original_pos
-        ):
+        )):
             tmp_gov = []
             tmp_dep = []
             tmp_pos = []

@@ -50,7 +50,7 @@ class TransformerLM(TransformerInterface):
     -------
     >>> src = torch.randint(0, 720, [8, 120])
     >>> net = TransformerLM(720, 512, 8, 1, 0, 1024, activation=torch.nn.GELU)
-    >>> enc_out = net.forward(src)
+    >>> enc_out = net.forward(src,,
     >>> print(enc_out.shape)
     torch.Size([8, 120, 720])
     """
@@ -96,9 +96,7 @@ class TransformerLM(TransformerInterface):
 
         self.embedding_proj = None
         if d_embedding is not None:
-            self.embedding_proj = Linear(
-                input_size=self.d_embedding, n_neurons=d_model
-            )
+            self.embedding_proj = Linear(input_size=self.d_embedding, n_neurons=d_model)
 
         self.output_proj = ModuleList(
             Linear(input_size=d_model, n_neurons=d_model),
@@ -195,9 +193,7 @@ class TransformerLM(TransformerInterface):
             if p.dim() > 1:
                 torch.nn.init.xavier_normal_(p)
 
-    def make_masks(
-        self, src, pad_idx=0, look_ahead_mask=True, padding_mask=True
-    ):
+    def make_masks(self, src, pad_idx=0, look_ahead_mask=True, padding_mask=True):
         src_mask = None
         if look_ahead_mask:
             src_mask = get_lookahead_mask(src)

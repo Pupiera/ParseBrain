@@ -40,6 +40,22 @@ class AlignmentOracle(Oracle):
             alignment, original_gov, original_dep, original_pos
         )
         corrected_head = []
+        # compute how many token have been inserted at which point and add it to the gov to keep pointing on the correct index 
+        for y, typ in enumerate(types):
+            for i, t in enumerate(typ):
+                if 'I' in t:
+                    govs[y][i] = -1
+                    deps[y][i] = self.alphabet[0]["INSERTION"]
+                    poss[y][i] = self.alphabet[1]["INSERTION"]
+                    for index_gov, g in enumerate(govs[y]):
+                        if 'INSERTION' == g:
+                            continue
+                        if int(g) > i:
+                            govs[y][index_gov]+=1
+        return types, govs, deps, poss
+
+
+        '''
         for y, typ in enumerate(types):
             c = 0
             corr = []
@@ -59,6 +75,7 @@ class AlignmentOracle(Oracle):
                 h = govs[i][y] - 1
                 c_add = corrected_head[i][h]
                 govs[i][y] += c_add
+        '''
         return types, govs, deps, poss
 
     def find_best_tree_from_alignment(
@@ -67,8 +84,12 @@ class AlignmentOracle(Oracle):
         original_gov: List,
         original_dep: List = None,
         original_pos: List = None,
+        pytorch_mode=True
     ):
         """
+        The two file sequence to be aligned: 
+        ie the first sentence in the alignment 
+        need to be the same as the first in gov, dep and pos
 
         @param alignment:
         @param original_gov:
@@ -131,6 +152,7 @@ class AlignmentOracle(Oracle):
                     dist_from_root.append(999999)
                     continue
                 if g == 0:
+                    has_root=True
                     dist = 0
                 else:
                     # if parent is alive, not root
@@ -152,9 +174,15 @@ class AlignmentOracle(Oracle):
                 root_position = 0
             new_gov = self.colapse_unconected_root(new_gov, root_position)
             new_gov = self.adapt_head_deletion(new_gov, typ)
-            new_gold_gov.append(torch.tensor(new_gov))
-            new_gold_dep.append(torch.tensor(new_dep))
-            new_gold_POS.append(torch.tensor(new_pos))
+            if pytorch_mode:
+                new_gold_gov.append(torch.tensor(new_gov))
+                new_gold_dep.append(torch.tensor(new_dep))
+                new_gold_POS.append(torch.tensor(new_pos))
+            else:
+                new_gold_gov.append(new_gov)
+                new_gold_dep.append(new_dep)
+                new_gold_POS.append(new_pos)
+                
         return new_gold_gov, new_gold_dep, new_gold_POS
 
     def find_closest_parent(self, typ, gov, index_child):

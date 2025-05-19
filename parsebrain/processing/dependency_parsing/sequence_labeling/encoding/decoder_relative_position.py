@@ -38,7 +38,7 @@ class DecoderRelPos(Decoder):
             value: key for (key, value) in self.pos_alphabet.items()
         }
 
-    def decode(self, list_prob: List, predicted_words: List[List], sent_ids: List):
+    def decode(self, list_prob: List, predicted_words: List[List], sent_ids: List, prob=True):
         """
             Decode the probability into a dependency tree
         Parameters
@@ -62,13 +62,19 @@ class DecoderRelPos(Decoder):
         ):  # for each element of the batch
             to_decode = {0: ["-BOS-", "-BOS-", "-BOS-", "-BOS-", "-BOS-"]}
             # for each element of seqlen
-            #print(f"{sent_id} \t {words} \t {p_govLabel.shape}")
+            # print(f"{sent_id} \t {words} \t {p_govLabel.shape}")
             for i, (p_dep, p_gov, p_pos, word) in enumerate(
                 zip(p_deps, p_govs, p_poss, words)
             ):
-                dep = self.reverse_dep_alphabet[torch.argmax(p_dep).item()]
-                gov = self.reverse_gov_alphabet[torch.argmax(p_gov).item()].split("@")
-                pos = self.reverse_pos_alphabet[torch.argmax(p_pos).item()]
+                if prob :
+                    dep = self.reverse_dep_alphabet[torch.argmax(p_dep).item()]
+                    gov = self.reverse_gov_alphabet[torch.argmax(p_gov).item()].split("@")
+                    pos = self.reverse_pos_alphabet[torch.argmax(p_pos).item()]
+                else:
+                    #already decoded
+                    dep = self.reverse_dep_alphabet[p_dep]
+                    gov = self.reverse_gov_alphabet[p_gov].split("@")
+                    pos = self.reverse_pos_alphabet[p_pos]
                 # if word == "":
                 #    word = "[EMPTY_ASR_WRD]"
                 to_decode[i + 1] = [word, pos, gov[0], dep, gov[-1]]
@@ -103,5 +109,7 @@ class DecoderRelPos(Decoder):
         # print(f"self.decoded_sentences {self.decoded_sentences}")
         self.p.write_to_file(self.decoded_sentences, pathFile, order)
 
-    def evaluateCoNLLU(self, goldPath, predictedPathFile, alig_path):
-        return self.p.evaluate_dependencies(goldPath, predictedPathFile, alig_path)
+    def evaluateCoNLLU(self, goldPath, predictedPathFile, alig_path=None, gold_segmentation = False):
+        if not gold_segmentation:
+            assert alig_path is not None, "if gold_segmentation is False, an alignment file path must be provided"
+        return self.p.evaluate_dependencies(goldPath, predictedPathFile, alig_path, gold_segmentation)

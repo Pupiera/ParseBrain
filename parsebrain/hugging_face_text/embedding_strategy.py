@@ -18,12 +18,10 @@ class LastSubWordEmbedding(EmbeddingStrategy):
         return torch.nn.utils.rnn.pad_sequence(newEmb, batch_first=True)
         # return pad_sequence(newEmb, batch_first=True)
 
-    def extract_features(self, tokens, words_end_position):
-        # features = self.hparams.lm_model.get_embeddings(tokens)
-        # print(tokens)
+    def extract_features(self, tokens, words_end_position, remove_eos = True):
         features = self.model(tokens)["last_hidden_state"]
-        features = features[:, 1:-1, :]  # Remove <bos> and <eos>
-        # print(features.shape)
-        # print(words_end_position)
-        # print(self.tokenizer.convert_ids_to_tokens(tokens[0]))
+        if remove_eos:
+            features = features[:, 1:-1, :]
+        else:
+            features = features[:, 1:, :]
         return self.get_last_subword_emb(features, words_end_position)

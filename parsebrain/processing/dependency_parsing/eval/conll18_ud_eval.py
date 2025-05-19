@@ -228,6 +228,7 @@ def load_conllu(file):
             )
             # Let's ignore language-specific deprel subtypes.
             self.columns[DEPREL] = columns[DEPREL].split(":")[0]
+            self.columns[DEPREL] = columns[DEPREL].lower()
             # Precompute which deprels are CONTENT_DEPRELS and which FUNCTIONAL_DEPRELS
             self.is_content_deprel = self.columns[DEPREL] in CONTENT_DEPRELS
             self.is_functional_deprel = self.columns[DEPREL] in FUNCTIONAL_DEPRELS
@@ -264,12 +265,15 @@ def load_conllu(file):
                                 _encode(word.columns[HEAD])
                             )
                         )
+                    # if not root
                     if head:
                         parent = ud.words[sentence_start + head - 1]
                         word.parent = "remapping"
                         process_word(parent)
                         word.parent = parent
 
+
+            #from pudb import set_trace; set_trace()
             for word in ud.words[sentence_start:]:
                 try:
                     process_word(word)
@@ -282,6 +286,7 @@ def load_conllu(file):
             for word in ud.words[sentence_start:]:
                 if word.parent and word.is_functional_deprel:
                     word.parent.functional_children.append(word)
+                
 
             # Check there is a single root node
 
@@ -315,7 +320,7 @@ def load_conllu(file):
         )
         if not columns[FORM]:
             raise UDError("There is an empty FORM in the CoNLL-U file")
-
+        columns[FORM] = columns[FORM].lower()
         # Save token
         ud.characters.extend(columns[FORM])
         ud.tokens.append(UDSpan(index, index + len(columns[FORM])))
@@ -347,6 +352,7 @@ def load_conllu(file):
             except:
                 raise UDError("Cannot parse word ID '{}'".format(_encode(columns[ID])))
             if word_id != len(ud.words) - sentence_start + 1:
+                print([w.columns for w in ud.words])
                 raise UDError(
                     "Incorrect word ID '{}' for word '{}', expected '{}'".format(
                         _encode(columns[ID]),
@@ -640,11 +646,12 @@ def load_conllu_file(path):
     return load_conllu(_file)
 
 
-def evaluate_wrapper(args):
-    # Load CoNLL-U files
-    gold_ud = load_conllu_file(args.gold_file)
-    system_ud = load_conllu_file(args.system_file)
-    return evaluate(gold_ud, system_ud)
+class TextEval:
+    def evaluate_wrapper(self, args):
+        # Load CoNLL-U files
+        gold_ud = load_conllu_file(args.gold_file)
+        system_ud = load_conllu_file(args.system_file)
+        return evaluate(gold_ud, system_ud)
 
 
 def main():
@@ -671,7 +678,8 @@ def main():
     args = parser.parse_args()
 
     # Evaluate
-    evaluation = evaluate_wrapper(args)
+    T = TextEval()
+    evaluation = T.evaluate_wrapper(args)
 
     # Print the evaluation
     if not args.verbose and not args.counts:

@@ -27,7 +27,7 @@ class TransitionBasedParser:
         decision_head: torch.nn.Module = None,
         label_head: torch.nn.Module = None,
         dynamic_oracle: DynamicOracle = None,
-        exploration_rate: int = 0.5,
+        exploration_rate: float = 0.5,
         static_oracle: StaticOracle = None,
         oracle_padding_value: int = -100,
     ):
@@ -58,7 +58,10 @@ class TransitionBasedParser:
         self.oracle_padding_value = oracle_padding_value
         self.softmax = sb.nnet.activations.Softmax(apply_log=True)
 
-    def _mask_by_valid(self, decions_logits, config):
+    def get_exploration_rate(self):
+        return self.exploration_rate
+
+    def _mask_by_valid(self, decisions_logits, config):
         """
         This function set the prob of invalid decision to 0 by modifying the logits.
         This allow better learning, because the system is focused on the decision it can take.
@@ -66,13 +69,16 @@ class TransitionBasedParser:
         config : the current state of all the coniguration
         """
         for i in range(len(config)):
-            d1 = decions_logits[i]
+            d1 = decisions_logits[i]
             c = config[i]
             for key, item in self.transition.get_transition_dict().items():
                 if not self.transition.is_decision_valid(item, c):
                     d1[item] = -(10**10)
-            decions_logits[i] = d1
-        return decions_logits
+            decisions_logits[i] = d1
+        return decisions_logits
+
+    def update_exploration_rate(self, rate):
+        self.exploration_rate = rate
 
     def parse(
         self,
@@ -99,8 +105,8 @@ class TransitionBasedParser:
         self.stage = stage
         # toDo: make this device attribution cleaner.
         self.device = config[0].buffer.device
+        self.static = static
 
-        # toDo: split this function.
         list_decision_taken = [[] for _ in range(len(config))]
         list_decision_score = [[] for _ in range(len(config))]
         oracle_decision = [[] for _ in range(len(config))]
@@ -111,7 +117,7 @@ class TransitionBasedParser:
         oracle_len = [-1 for _ in range(len(config))]
         # we compute the supervision with static alignment_oracle
         step_seq = 0
-        using_dynanmic_as_static = static and self.static_oracle is None
+        self.using_dynamic_as_static = (static and self.static_oracle is None) or not static
 
         if (
             sb.Stage.TRAIN == stage
@@ -120,69 +126,20 @@ class TransitionBasedParser:
             and self.static_oracle != None
         ):
             oracle_decision = self._get_static_supervision(static, gold_config)
+
+        # PARSER LOOP
         while any([not self._is_terminal(conf) for conf in config]):
-            # Batched decision score for UAS
-            # todo: need to rename this
-            # this function compute the embedding to use in input. Feature should be the encoding of these
-            features = self._compute_features(config)
-            # case for shared features uses
-            if self.decision_head is not None:
-                features = self.parser_neural_network(features)
-                if len(features.shape) >= 3:
-                    features = features[:, -1, :]
-
-            # -----------------ACTIONS------------------------
-            decision_score = self._decision_score(features)
-            decision_score = self._mask_by_valid(decision_score, config)
-            decision_score = self.softmax(decision_score)
-            # append it to the correct sequence of decision
-            for i, d_score in enumerate(decision_score):
-                list_decision_score[i].append(d_score)
-
-            if (
-                (
-                    (sb.Stage.TRAIN == stage and using_dynanmic_as_static)
-                    or sb.Stage.VALID == stage
-                )
-                and gold_config is not None
-                and self.dynamic_oracle is not None
-            ):
-                oracle_decision = self._get_oracle_move_from_config_tree(
-                    config, gold_config, oracle_decision
-                )
-
-            # batched find best decision
-            # Will need to define rate of exploration with dynamic alignment_oracle
-            decision_taken = self.get_decision(
-                decision_score, config, oracle_decision, oracle_len, step_seq, static
-            )
-            # ToDo: find a way to do this kind of operation with matrice operation. (to remove loops)
-            for i, d in enumerate(decision_taken):
-                list_decision_taken[i].append(d)
-
-            # Based on the decision taken, create feature then compute the label
-            # -----------------------LABEL-------------------------------------#
-            if self.label_neural_network is not None:
-                label_score, mask_label = self._compute_label_not_shared(
-                    config, decision_taken
-                )
-            else:
-                label_score, mask_label = self._compute_label_shared(
-                    features, decision_taken
-                )
-            for i in range(len(config)):
-                if mask_label[i] == 1:
-                    list_label_decision_score[i].append(label_score[i])
-                    if gold_config is not None:
-                        dynamic_oracle_label = self.dynamic_oracle.compute_label(
-                            config[i], gold_config[i], decision_taken[i]
-                        )
-                        # if this a error in UAS (couple does not exist), reinforce current predictions.
-                        if dynamic_oracle_label == self.oracle_padding_value:
-                            dynamic_oracle_label = torch.argmax(label_score[i])
-                        dynamic_oracle_label_decision[i].append(dynamic_oracle_label)
-                        list_mask_label[i].append(mask_label[i])
-            # batched update config for each decision now that all prediction has been done
+            # UAS
+            decision_score, decision_taken, oracle_decision = self._step_UAS(config, gold_config, oracle_decision, oracle_len, step_seq)
+            list_decision_score, list_decision_taken = self._update_UAS_list(decision_score, decision_taken, list_decision_score, list_decision_taken)
+            #LAS
+            label_score,  mask_label = self._step_LAS(config, decision_taken)            
+            (list_label_decision_score, 
+             dynamic_oracle_label_decision, 
+             list_mask_label) = self._update_LAS_list(config, gold_config, label_score, 
+                    decision_taken, list_label_decision_score, 
+                    dynamic_oracle_label_decision, mask_label, list_mask_label)
+            #UPDATE CONFIG
             config = self._apply_decision(decision_taken, config)
             parsed_tree = self._update_tree_v2(
                 decision_taken, label_score, config, parsed_tree, mask_label
@@ -190,16 +147,8 @@ class TransitionBasedParser:
             step_seq += 1
 
         # ----------------------------list to tensor -----------------------------------------
-        if (
-            (
-                (sb.Stage.TRAIN == stage and not using_dynanmic_as_static)
-                or sb.Stage.VALID == stage
-            )
-            and gold_config is not None
-            and self.dynamic_oracle is not None
-        ):
-            oracle_decision = torch.tensor(oracle_decision)
-        if not static or using_dynanmic_as_static:
+        #if not static or self.using_dynamic_as_static:
+        if not torch.is_tensor(oracle_decision):
             oracle_decision = torch.tensor(oracle_decision)
         list_decision_score = [torch.stack(x) for x in list_decision_score]
         list_decision_taken = [torch.stack(x) for x in list_decision_taken]
@@ -240,6 +189,77 @@ class TransitionBasedParser:
             ),
         }
 
+
+
+    def _step_UAS(self, config: Configuration, gold_config, oracle_decision, oracle_len, step_seq):
+        # Batched decision score for UAS
+        # todo: need to rename this
+        # this function compute the embedding to use in input. Feature should be the encoding of these
+        features = self._compute_features(config)
+        # case for shared features uses
+        # -----------------ACTIONS------------------------
+        decision_score = self._decision_score(features)
+        #decision_score = self._mask_by_valid(decision_score, config)
+        decision_score = self.softmax(decision_score)
+
+        if (
+            (
+                (sb.Stage.TRAIN == self.stage and self.using_dynamic_as_static)
+                or sb.Stage.VALID == self.stage
+            )
+            and len(gold_config) >0
+            and self.dynamic_oracle is not None
+        ):
+            oracle_decision = self._get_oracle_move_from_config_tree(
+                config, gold_config, oracle_decision
+            )
+
+        # batched find best decision
+        decision_taken = self.get_decision(
+            decision_score, config, oracle_decision, oracle_len, step_seq, self.static
+        )
+
+        return decision_score, decision_taken, oracle_decision
+
+    def _update_UAS_list(self, decision_score, decision_taken, list_decision_score, list_decision_taken):
+        for i, d_score in enumerate(decision_score):
+            list_decision_score[i].append(d_score)
+        for i, d in enumerate(decision_taken):
+            list_decision_taken[i].append(d)
+        return list_decision_score, list_decision_taken
+
+
+    def _step_LAS(self, config: Configuration, decision_taken):
+        # Based on the decision taken, create feature then compute the label
+        if self.label_neural_network is not None:
+            label_score, mask_label = self._compute_label_not_shared(
+                config, decision_taken
+            )
+        else:
+            label_score, mask_label = self._compute_label_shared(
+                self.shared_features, decision_taken
+            )
+        return label_score, mask_label
+
+    def _update_LAS_list(self, config, gold_config, label_score, 
+            decision_taken, list_label_decision_score, 
+            dynamic_oracle_label_decision, mask_label, 
+            list_mask_label):
+        for i in range(len(config)):          
+            if mask_label[i] == 1:
+                list_label_decision_score[i].append(label_score[i])
+                if len(gold_config) >0:
+                    dynamic_oracle_label = self.dynamic_oracle.compute_label(
+                        config[i], gold_config[i], decision_taken[i]
+                    )
+                    # if this a error in UAS (couple does not exist), reinforce current predictions.
+                    if dynamic_oracle_label == self.oracle_padding_value:
+                        dynamic_oracle_label = torch.argmax(label_score[i])
+                    dynamic_oracle_label_decision[i].append(dynamic_oracle_label)
+            list_mask_label[i].append(mask_label[i])
+        return list_label_decision_score, dynamic_oracle_label_decision, list_mask_label
+
+
     def _decision_score(self, x: torch.Tensor) -> torch.Tensor:
         """
         x :  features to score
@@ -247,12 +267,21 @@ class TransitionBasedParser:
         """
         if self.decision_head is None:
             x = self.parser_neural_network(x)
+            # case with rnn (select last prediction of RNN)
+            # we can't take hidden if it's not divided in two module
+            if len(x.shape) >= 3:
+                x = x[:, -1, :]
         else:
+            x = self.parser_neural_network(x)
+            #rnn case take hidden
+            if len(x) == 2:
+                hidden = x[1]
+                if isinstance(hidden, tuple):
+                    hidden = hidden[0]
+
+                #shape [nb_hidden, batch, dim), mean by nb_hidden (nb_layers * bidirectionality)
+                x = torch.mean(hidden, dim=0)#.unsqueeze(1)
             x = self.decision_head(x)
-        # case with rnn (select last prediction of RNN)
-        # maybe with rnn, we prefer to take the hidden and classify that ?
-        if len(x.shape) >= 3:
-            x = x[:, -1, :]
         return x
 
     def _update_tree(
@@ -290,22 +319,25 @@ class TransitionBasedParser:
     def get_decision(
         self, decision_score, config, oracle_decision, oracle_len, step_seq, static
     ):
-        if sb.Stage.TRAIN == self.stage:
-            if static:
-                decision_taken = [x[step_seq] for x in oracle_decision]
-            elif not static:
-                # exploration rate should be warmed up
-                if torch.rand(1) <= self.exploration_rate:
-                    decision_taken = self._get_best_valid_decision(
-                        decision_score, config
-                    )
-                else:
-                    decision_taken = [x[step_seq] for x in oracle_decision]
-                # compute len, maybe more efficient to do it once at the end ? but how?
+        # FOR LEN COMPUTATION ON TRAIN AND VALID, TO COMPUTE METRICS
+        if sb.Stage.TRAIN == self.stage or sb.Stage.VALID == self.stage:
             for i, o_d in enumerate(oracle_decision):
                 # if first time seing alignment_oracle padding
                 if o_d[step_seq] == self.oracle_padding_value and oracle_len[i] == -1:
                     oracle_len[i] = step_seq
+        
+
+
+        if sb.Stage.TRAIN == self.stage and static:
+            decision_taken = [x[step_seq] for x in oracle_decision]
+        elif sb.Stage.TRAIN == self.stage:
+            # exploration rate should be warmed up
+            if torch.rand(1) <= self.exploration_rate:
+                decision_taken = self._get_best_valid_decision(
+                    decision_score, config
+                )
+            else:
+                decision_taken = [x[step_seq] for x in oracle_decision]
         else:
             # if test or validation, full exploration.
             decision_taken = self._get_best_valid_decision(decision_score, config)
@@ -345,7 +377,7 @@ class TransitionBasedParser:
         """
         has_root = [c.has_root for c in config]
         return self.features_computer.compute_feature(
-            [x.stack for x in config], [x.buffer for x in config], has_root, self.device
+            [x.stack for x in config], [x.buffer for x in config], has_root, torch.stack([x.root for x in config]).squeeze(1), self.device
         )
 
     def _compute_features_2(self, x: torch.tensor) -> torch.tensor:
