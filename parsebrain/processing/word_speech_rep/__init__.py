@@ -1,0 +1,2 @@
+from .word_speech_ctc import WordSpeechCtC
+from .word_speech_binary_fusion import WordSpeechBinaryFusion

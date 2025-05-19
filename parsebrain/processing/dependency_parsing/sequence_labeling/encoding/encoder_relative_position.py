@@ -1,4 +1,4 @@
-from .postprocessing import LabelPostProcessor_dep2Label
+from parsebrain.processing.dependency_parsing.sequence_labeling.encoding.postprocessing import LabelPostProcessor_dep2Label
 from parsebrain.processing.dependency_parsing.sequence_labeling.encoding.encoder import (
     Encoder,
 )
@@ -12,6 +12,7 @@ class RelPosEncoding(Encoder):
     """
 
     def encodeFromList(self, wrds, poss, govs, deps):
+
         """
         *
         Parameters
@@ -24,7 +25,12 @@ class RelPosEncoding(Encoder):
         Returns a List of dep2label to be used for the tagging task.
         2 task Separated by "{}". here the task are the 1 : relative_position_head + postag_gov and 2: the type of dep
         -------
-
+        >>> wrds = ['mais', 'on', "s'", 'amuse', 'beaucoup', "c'", 'est', "l'", 'école', "d'", 'ingénieur', 'euh', 'le', 'retour', 'des', 'de', 'la', 'vie', 'sociale', 'de', 'les', 'amis', 'et', 'tout', 'ça', 'donc', 'ça', "c'", 'était', 'chouette']
+        >>> poss = ['CCONJ', 'PRON', 'PRON', 'VERB', 'ADV', 'PRON', 'VERB', 'DET', 'NOUN', 'ADP', 'NOUN', 'INTJ', 'DET', 'NOUN', 'ADP+DET', 'ADP', 'DET', 'NOUN', 'ADJ', 'ADP', 'DET', 'NOUN', 'CCONJ', 'ADJ', 'PRON', 'CCONJ', 'PRON', 'PRON', 'VERB', 'ADJ']
+        >>> govs = ['4', '4', '4', '0', '4', '7', '14', '9', '7', '11', '9', '14', '14', '4', '15', '18', '18', '14', '18', '22', '22', '15', '25', '25', '22', '29', '29', '29', '22', '29']
+        >>> deps = ['cc', 'nsubj', 'expl:comp', 'root', 'advmod', 'nsubj', 'reparandum', 'det', 'xcomp', 'case', 'nmod', 'discourse', 'det', 'conj', 'case+reparandum', 'case', 'det', 'nmod', 'amod', 'case', 'det', 'appos', 'cc', 'amod', 'conj', 'cc', 'dislocated', 'nsubj', 'conj', 'xcomp']
+        >>> encoding = RelPosEncoding()
+        >>> encoding.encodeFromList(wrds, poss, govs, deps)
         """
         list_label = []
         for i, (wrd, pos, gov, dep) in enumerate(zip(wrds, poss, govs, deps)):
@@ -34,6 +40,8 @@ class RelPosEncoding(Encoder):
                 list_label.append(full_label)
                 continue
             gov = int(gov) - 1
+            if gov == i:
+                raise ValueError(f"Governor and line index is the same, check your conllu file for sentence : {' '.join(wrds)}")
             if i < gov:
                 relative_position_head = 1
                 postag_gov = poss[gov]
@@ -258,3 +266,18 @@ class RelPosEncoding(Encoder):
                     decoded_words.update({word_index: head_word})
 
         return decoded_words, unassigned_word
+
+
+
+
+if __name__ == "__main__":
+    #import doctest
+
+    #doctest.testmod()
+    wrds = ['mais', 'on', "s'", 'amuse', 'beaucoup', "c'", 'est', "l'", 'école', "d'", 'ingénieur', 'euh', 'le', 'retour', 'des', 'de', 'la', 'vie', 'sociale', 'de', 'les', 'amis', 'et', 'tout', 'ça', 'donc', 'ça', "c'", 'était', 'chouette']
+    poss = ['CCONJ', 'PRON', 'PRON', 'VERB', 'ADV', 'PRON', 'VERB', 'DET', 'NOUN', 'ADP', 'NOUN', 'INTJ', 'DET', 'NOUN', 'ADP+DET', 'ADP', 'DET', 'NOUN', 'ADJ', 'ADP', 'DET', 'NOUN', 'CCONJ', 'ADJ', 'PRON', 'CCONJ', 'PRON', 'PRON', 'VERB', 'ADJ']
+    govs = ['4', '4', '4', '0', '4', '7', '14', '9', '7', '11', '9', '14', '14', '4', '15', '18', '18', '14', '18', '22', '22', '15', '25', '25', '22', '29', '29', '29', '22', '29']
+    deps = ['cc', 'nsubj', 'expl:comp', 'root', 'advmod', 'nsubj', 'reparandum', 'det', 'xcomp', 'case', 'nmod', 'discourse', 'det', 'conj', 'case+reparandum', 'case', 'det', 'nmod', 'amod', 'case', 'det', 'appos', 'cc', 'amod', 'conj', 'cc', 'dislocated', 'nsubj', 'conj', 'xcomp']
+    encoding = RelPosEncoding()
+    from pudb import set_trace; set_trace()
+    encoding.encodeFromList(wrds, poss, govs, deps)

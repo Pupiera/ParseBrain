@@ -8,3 +8,4 @@ for filename in os.listdir(os.path.dirname(__file__)):
 
 from . import *
 from .dataio import load_data_conllu
+from .conllu_tokens import ConlluDict

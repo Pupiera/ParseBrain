@@ -8,6 +8,7 @@ from parsebrain.processing.dependency_parsing.sequence_labeling.alignment_oracle
 )
 import torch
 
+import unittest
 
 class OracleRelPos(Oracle):
     def __init__(self, reader_alig: Reader):
@@ -44,7 +45,7 @@ class OracleRelPos(Oracle):
             alignment, original_gov, original_dep, original_pos
         )
 
-        for typ, gov, dep, pos in zip(types, govs, deps, poss):  # for each sentence
+        for index_sentence, (typ, gov, dep, pos) in enumerate(zip(types, govs, deps, poss)):  # for each sentence
             # print(f"{typ} {[self.reverse[0].get(g.item()) for g in gov]} {[self.reverse[1].get(d.item()) for d in dep]} {[self.reverse[2].get(p.item()) for p in pos]}")
             has_root = False
             new_gov = []
@@ -67,7 +68,7 @@ class OracleRelPos(Oracle):
                 if (
                     t == "D"
                 ):  # Deleted tokens do not appears in the new best dependency tree
-                    dist_from_root.append(999999)
+                    dist_from_root.append(9999999)
                     continue
                 if t == "I":
                     new_gov.append(
@@ -75,7 +76,7 @@ class OracleRelPos(Oracle):
                     )  # insertion will be attach to root later
                     new_dep.append(d)
                     new_pos.append(p)
-                    dist_from_root.append(999999)
+                    dist_from_root.append(9999999)
                     continue
                 # while p_t == 'D' or not p_gov == "-1@ROOT": # while parent is deleted and current gov is not root
                 if g == self.alphabet[0]["-1@ROOT"]:
@@ -83,7 +84,14 @@ class OracleRelPos(Oracle):
                     dist = 0
                 else:
                     dist = 99999  # if parent is alive, not root
-                    p_t, p_gov, index = self.find_parent_type(g, pos_trad, typ, gov, i)
+                    try:
+                        p_t, p_gov, index = self.find_parent_type(g, pos_trad, typ, gov, i)
+                    except RuntimeError as e:
+                        print(index_sentence)
+                        print([self.reverse[0][g] for g in gov])
+                        print([self.reverse[1][d] for d in dep])
+                        print(pos_trad)
+                        raise e
                     # print(f"pt : {p_t}, p_gov : {self.reverse[0].get(p_gov.item())}")
                     if (
                         p_t == "D"
@@ -189,14 +197,53 @@ class OracleRelPos(Oracle):
 
         """
         new_root_index = dist_from_root.index(min(dist_from_root))
+        # shift by the number of deleted words before the root, since they have a distance value
+        # but not a gov
+        #new_root_index = new_root_index - sum([t =='D' for t in typ[:new_root_index]])
+        
+        assert new_root_index < len(pos_list), f"{pos_list}, {new_root_index}, {dist_from_root.index(min(dist_from_root))}, {typ}"
+        assert pos_list[new_root_index] != 'INSERTION', f"{pos_list}, {new_root_index}, {dist_from_root}, {dist_from_root.index(min(dist_from_root))}, {typ}"
+        assert len(pos_list) == len(dist_from_root)
+        #print(pos_list[new_root_index])
         root = self.alphabet[0]["-1@ROOT"]
-        for i, gov in enumerate(new_gov):
-            if gov == root:
-                if i == new_root_index:
+        try: 
+            for i, gov in enumerate(new_gov):
+                if gov == root:
+                    if i == new_root_index:
+                        continue
+                    new_gov[i] = self.create_new_label_from_index(
+                        pos_list, typ, new_root_index, i
+                    )
+        except AssertionError as e:
+            print(pos_list)
+            print(typ)
+            print(new_root_index)
+            print(i)
+            raise e
+        
+        ''' NEW VERSION'''
+        ''' 
+        pos_list = [p for p, t in zip(pos_list, typ) if t != 'D']
+        typ = [t for t in typ if t !='D']
+        try:
+            index=0
+            for t in typ:
+                if t == 'D':
                     continue
-                new_gov[i] = self.create_new_label_from_index(
-                    pos_list, typ, new_root_index, i
-                )
+                gov = new_gov[index]
+                print(gov)
+                if gov == root and index != new_root_index:
+                    new_gov[index] = self.create_new_label_from_index(
+                        pos_list, typ, new_root_index, index
+                    )
+                index+=1
+        except ValueError as e:
+            print([self.reverse[0][g] for g in new_gov])
+            print(pos_list)
+            print(typ)
+            print(dist_from_root)
+            raise e
+        '''
         return new_gov
 
     def create_new_label_from_index(self, pos_list, typ, target_index, index_child):
@@ -227,6 +274,7 @@ class OracleRelPos(Oracle):
                     cpt -= 1
         try:
             assert cpt != 0
+            assert "INSERTION" not in pos_list[target_index]
         except AssertionError as e:
             print(pos_list)
             print(typ)
@@ -292,191 +340,231 @@ class OracleRelPos(Oracle):
                         return typ[i], govList[i].item(), i
                     except AttributeError:  # not tensor
                         return typ[i], govList[i], i
+
+
+#        print(f"Dynamic oracle did not manage to find head of one element.{fields[0]}@{posToFind}. index : {index}, POS {pos}, defaulting to root, probably caused by faluty data")
+ #       return "C", "ROOT", index
+        
         raise RuntimeError(
             f"Dynamic oracle did not manage to find head of one element.{fields[0]}@{posToFind}. index : {index}, POS {pos}"
         )
+        
 
     ###############################################################################################"""
     # TODO: Move this to test package
-    import unittest
 
-    class OracleRelPosTest(unittest.TestCase):
-        def setUp(self):
-            alphabet_gov = {
-                "-1@ROOT": 0,
-                "-1@VRB": 1,
-                "+1@VRB": 2,
-                "+2@VRB": 3,
-                "-2@VRB": 4,
-                "-1@NOUN": 5,
-                "+1@NOUN": 6,
-                "+2@NOUN": 7,
-                "-2@NOUN": 8,
-                "-1@CLS": 9,
-                "+1@CLS": 10,
-                "-1@DELETION": 11,
-                "-3@VRB": 12,
-                "-1@PRQ": 13,
-            }
+class OracleRelPosTest(unittest.TestCase):
+    def setUp(self):
+        alphabet_gov = {
+            "-1@ROOT": 0,
+            "-1@VRB": 1,
+            "+1@VRB": 2,
+            "+2@VRB": 3,
+            "-2@VRB": 4,
+            "-1@NOUN": 5,
+            "+1@NOUN": 6,
+            "+2@NOUN": 7,
+            "-2@NOUN": 8,
+            "-1@CLS": 9,
+            "+1@CLS": 10,
+            "-1@DELETION": 11,
+            "-3@VRB": 12,
+            "-1@PRQ": 13,
+            "-1@PRE": 14,
+            "+1@PRE": 15,
+            "+1@CLI": 16,
+            "-1@CLI": 17,
+        }
 
-            alphabet_dep = {"dep": 0, "aux": 1, "DELETION": 2, "INSERTION": 3}
-            POS_LIST = ["VRB", "NOUN", "CLS", "ADV", "PRQ", "CSU", "COO", "DET"]
-            alphabet_POS = {key: i for i, key in enumerate(POS_LIST)}
-            self.alphabet = [alphabet_gov, alphabet_dep, alphabet_POS]
+        alphabet_dep = {"dep": 0, "aux": 1, "DELETION": 2, "INSERTION": 3}
+        POS_LIST = ["VRB", "NOUN", "CLS", "ADV", "PRQ", "CSU", "COO", "DET", "PRE", "CLI"]
+        alphabet_POS = {key: i for i, key in enumerate(POS_LIST)}
+        self.alphabet = [alphabet_gov, alphabet_dep, alphabet_POS]
 
-            self.reverse = [
-                {item: key for (key, item) in alphabet_gov.items()},
-                {item: key for (key, item) in alphabet_dep.items()},
-                {item: key for (key, item) in alphabet_POS.items()},
-            ]
-            self.d_oracle = OracleRelPos(self.alphabet, self.reverse)
+        self.reverse = [
+            {item: key for (key, item) in alphabet_gov.items()},
+            {item: key for (key, item) in alphabet_dep.items()},
+            {item: key for (key, item) in alphabet_POS.items()},
+        ]
+        reader = Reader()
+        self.d_oracle = OracleRelPos(reader)
+        self.d_oracle.set_alphabet(self.alphabet, self.reverse)
 
-        def test_find_parent_type(self):
-            POS = ["CLS", "VRB", "NOUN", "NOUN"]  # dummy phrase like, i am SURNAME NAME
-            HEAD = ["+1@VRB", "-1@ROOT", "-1@VRB", "-1@NOUN"]
-            TYP = ["C", "C", "C", "C"]
-            tensor_HEAD = torch.tensor([self.alphabet[0][h] for h in HEAD])
-            p_t, p_gov, index = self.d_oracle.find_parent_type(
-                self.alphabet[0][HEAD[0]], POS, TYP, tensor_HEAD, 0
-            )
-            self.assertEqual("C", p_t)
-            self.assertEqual(tensor_HEAD[1].item(), p_gov)
-            self.assertEqual(1, index)
-            p_t, p_gov, index = self.d_oracle.find_parent_type(
-                self.alphabet[0][HEAD[2]], POS, TYP, tensor_HEAD, 2
-            )
-            self.assertEqual("C", p_t)
-            self.assertEqual(tensor_HEAD[1].item(), p_gov)
-            self.assertEqual(1, index)
+    def test_find_parent_type(self):
+        POS = ["CLS", "VRB", "NOUN", "NOUN"]  # dummy phrase like, i am SURNAME NAME
+        HEAD = ["+1@VRB", "-1@ROOT", "-1@VRB", "-1@NOUN"]
+        TYP = ["C", "C", "C", "C"]
+        tensor_HEAD = torch.tensor([self.alphabet[0][h] for h in HEAD])
+        p_t, p_gov, index = self.d_oracle.find_parent_type(
+            self.alphabet[0][HEAD[0]], POS, TYP, tensor_HEAD, 0
+        )
+        self.assertEqual("C", p_t)
+        self.assertEqual(tensor_HEAD[1].item(), p_gov)
+        self.assertEqual(1, index)
+        p_t, p_gov, index = self.d_oracle.find_parent_type(
+            self.alphabet[0][HEAD[2]], POS, TYP, tensor_HEAD, 2
+        )
+        self.assertEqual("C", p_t)
+        self.assertEqual(tensor_HEAD[1].item(), p_gov)
+        self.assertEqual(1, index)
 
-        def test_find_parent_type_MiddleDeleted(self):
-            POS = [
-                "CLS",
-                "VRB",
-                "VRB",
-                "VRB",
-                "NOUN",
-            ]  # dummy phrase like, i am SURNAME NAME
-            HEAD = ["+2@VRB", "+1@VRB", "-1@ROOT", "-1@VRB", "-2@VRB"]
-            TYP = ["C", "D", "C", "D", "C"]
-            tensor_HEAD = torch.tensor([self.alphabet[0][h] for h in HEAD])
-            p_t, p_gov, index = self.d_oracle.find_parent_type(
-                self.alphabet[0][HEAD[0]], POS, TYP, tensor_HEAD, 0
-            )
-            self.assertEqual("C", p_t)
-            self.assertEqual(tensor_HEAD[2].item(), p_gov)
-            self.assertEqual(2, index)
-            p_t, p_gov, index = self.d_oracle.find_parent_type(
-                self.alphabet[0][HEAD[4]], POS, TYP, tensor_HEAD, 4
-            )
-            self.assertEqual("C", p_t)
-            self.assertEqual(tensor_HEAD[2].item(), p_gov)
-            self.assertEqual(2, index)
+    def test_find_parent_type_MiddleDeleted(self):
+        POS = [
+            "CLS",
+            "VRB",
+            "VRB",
+            "VRB",
+            "NOUN",
+        ]  # dummy phrase like, i am SURNAME NAME
+        HEAD = ["+2@VRB", "+1@VRB", "-1@ROOT", "-1@VRB", "-2@VRB"]
+        TYP = ["C", "D", "C", "D", "C"]
+        tensor_HEAD = torch.tensor([self.alphabet[0][h] for h in HEAD])
+        p_t, p_gov, index = self.d_oracle.find_parent_type(
+            self.alphabet[0][HEAD[0]], POS, TYP, tensor_HEAD, 0
+        )
+        self.assertEqual("C", p_t)
+        self.assertEqual(tensor_HEAD[2].item(), p_gov)
+        self.assertEqual(2, index)
+        p_t, p_gov, index = self.d_oracle.find_parent_type(
+            self.alphabet[0][HEAD[4]], POS, TYP, tensor_HEAD, 4
+        )
+        self.assertEqual("C", p_t)
+        self.assertEqual(tensor_HEAD[2].item(), p_gov)
+        self.assertEqual(2, index)
 
-        def test_find_parent_type_Jump(self):
-            POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
-            HEAD = ["+2@VRB", "-1@ROOT", "-1@VRB", "-2@VRB", "-1@VRB"]
-            TYP = ["C", "C", "C", "C", "C"]
-            tensor_HEAD = torch.tensor([self.alphabet[0][h] for h in HEAD])
-            p_t, p_gov, index = self.d_oracle.find_parent_type(
-                self.alphabet[0][HEAD[0]], POS, TYP, tensor_HEAD, 0
-            )  # forward
-            self.assertEqual("C", p_t)
-            self.assertEqual(tensor_HEAD[2].item(), p_gov)
-            self.assertEqual(2, index)
-            p_t, p_gov, index = self.d_oracle.find_parent_type(
-                self.alphabet[0][HEAD[3]], POS, TYP, tensor_HEAD, 3
-            )  # backward
-            self.assertEqual("C", p_t)
-            self.assertEqual(tensor_HEAD[1].item(), p_gov)
-            self.assertEqual(1, index)
+    def test_find_parent_type_Jump(self):
+        POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
+        HEAD = ["+2@VRB", "-1@ROOT", "-1@VRB", "-2@VRB", "-1@VRB"]
+        TYP = ["C", "C", "C", "C", "C"]
+        tensor_HEAD = torch.tensor([self.alphabet[0][h] for h in HEAD])
+        p_t, p_gov, index = self.d_oracle.find_parent_type(
+            self.alphabet[0][HEAD[0]], POS, TYP, tensor_HEAD, 0
+        )  # forward
+        self.assertEqual("C", p_t)
+        self.assertEqual(tensor_HEAD[2].item(), p_gov)
+        self.assertEqual(2, index)
+        p_t, p_gov, index = self.d_oracle.find_parent_type(
+            self.alphabet[0][HEAD[3]], POS, TYP, tensor_HEAD, 3
+        )  # backward
+        self.assertEqual("C", p_t)
+        self.assertEqual(tensor_HEAD[1].item(), p_gov)
+        self.assertEqual(1, index)
 
-        def test_create_new_label_from_index(self):
-            POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
-            TYP = ["C", "C", "C", "C", "C"]
-            x = self.d_oracle.create_new_label_from_index(POS, TYP, 1, 0)
-            self.assertEqual(self.alphabet[0]["+1@VRB"], x)
-            x = self.d_oracle.create_new_label_from_index(POS, TYP, 2, 0)
-            self.assertEqual(self.alphabet[0]["+2@VRB"], x)
-            x = self.d_oracle.create_new_label_from_index(POS, TYP, 0, 1)
-            self.assertEqual(self.alphabet[0]["-1@VRB"], x)
-            x = self.d_oracle.create_new_label_from_index(POS, TYP, 0, 2)
-            self.assertEqual(self.alphabet[0]["-2@VRB"], x)
+    def test_create_new_label_from_index(self):
+        POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
+        TYP = ["C", "C", "C", "C", "C"]
+        x = self.d_oracle.create_new_label_from_index(POS, TYP, 1, 0)
+        self.assertEqual(self.alphabet[0]["+1@VRB"], x)
+        x = self.d_oracle.create_new_label_from_index(POS, TYP, 2, 0)
+        self.assertEqual(self.alphabet[0]["+2@VRB"], x)
+        x = self.d_oracle.create_new_label_from_index(POS, TYP, 0, 1)
+        self.assertEqual(self.alphabet[0]["-1@VRB"], x)
+        x = self.d_oracle.create_new_label_from_index(POS, TYP, 0, 2)
+        self.assertEqual(self.alphabet[0]["-2@VRB"], x)
 
-        def test_create_new_label_from_index_middle_deletion(self):
-            POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
-            TYP = ["C", "D", "C", "D", "C"]
-            x = self.d_oracle.create_new_label_from_index(POS, TYP, 2, 0)
-            self.assertEqual(self.alphabet[0]["+1@VRB"], x)
-            x = self.d_oracle.create_new_label_from_index(POS, TYP, 2, 4)
-            self.assertEqual(self.alphabet[0]["-1@VRB"], x)
-            POS = ["ADV", "PRQ", "CSU", "COO", "DET", "DET", "NOM"]
-            TYP = ["C", "D", "S", "C", "C", "C", "S"]
-            with self.assertRaises(ValueError):
-                x = self.d_oracle.create_new_label_from_index(POS, TYP, 1, 2)
+    def test_create_new_label_from_index_middle_deletion(self):
+        POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
+        TYP = ["C", "D", "C", "D", "C"]
+        x = self.d_oracle.create_new_label_from_index(POS, TYP, 2, 0)
+        self.assertEqual(self.alphabet[0]["+1@VRB"], x)
+        x = self.d_oracle.create_new_label_from_index(POS, TYP, 2, 4)
+        self.assertEqual(self.alphabet[0]["-1@VRB"], x)
+        POS = ["ADV", "PRQ", "CSU", "COO", "DET", "DET", "NOM"]
+        TYP = ["C", "D", "S", "C", "C", "C", "S"]
+        with self.assertRaises(ValueError):
+            x = self.d_oracle.create_new_label_from_index(POS, TYP, 1, 2)
 
-        def test_multiple_root(self):
-            HEAD = ["+2@VRB", "-1@ROOT", "-1@VRB", "-2@VRB", "-1@VRB"]
-            HEAD_n = [self.alphabet[0][x] for x in HEAD]
-            self.assertFalse(self.d_oracle.multiple_root(HEAD_n))
-            HEAD = ["+2@VRB", "-1@ROOT", "-1@ROOT", "-2@VRB", "-1@VRB"]
-            HEAD_n = [self.alphabet[0][x] for x in HEAD]
-            self.assertTrue(self.d_oracle.multiple_root(HEAD_n))
+    def test_multiple_root(self):
+        HEAD = ["+2@VRB", "-1@ROOT", "-1@VRB", "-2@VRB", "-1@VRB"]
+        HEAD_n = [self.alphabet[0][x] for x in HEAD]
+        self.assertFalse(self.d_oracle.multiple_root(HEAD_n))
+        HEAD = ["+2@VRB", "-1@ROOT", "-1@ROOT", "-2@VRB", "-1@VRB"]
+        HEAD_n = [self.alphabet[0][x] for x in HEAD]
+        self.assertTrue(self.d_oracle.multiple_root(HEAD_n))
 
-        def test_collapse_roots(self):
-            HEAD = ["+2@VRB", "-1@ROOT", "-1@ROOT", "-2@VRB", "-1@VRB"]
-            HEAD_n = [self.alphabet[0][x] for x in HEAD]
-            POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
-            TYP = ["C", "C", "C", "C", "C"]
-            DIST = [99999, 1, 2, 99999, 99999]
-            x = self.d_oracle.collapse_root(HEAD_n, POS, TYP, DIST)
-            res = ["+2@VRB", "-1@ROOT", "-1@VRB", "-2@VRB", "-1@VRB"]
-            res_n = [self.alphabet[0][x] for x in res]
-            self.assertEqual(res_n, x)
+    def test_collapse_roots(self):
+        HEAD = ["+2@VRB", "-1@ROOT", "-1@ROOT", "-2@VRB", "-1@VRB"]
+        HEAD_n = [self.alphabet[0][x] for x in HEAD]
+        POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
+        TYP = ["C", "C", "C", "C", "C"]
+        DIST = [99999, 1, 2, 99999, 99999]
+        x = self.d_oracle.collapse_root(HEAD_n, POS, TYP, DIST)
+        res = ["+2@VRB", "-1@ROOT", "-1@VRB", "-2@VRB", "-1@VRB"]
+        res_n = [self.alphabet[0][x] for x in res]
+        self.assertEqual(res_n, x)
 
-        def test_find_closest_parent(self):
-            # one deletion
-            HEAD = ["+2@VRB", "-1@ROOT", "-1@VRB", "-2@VRB", "-1@VRB"]
-            HEAD_n = torch.tensor([self.alphabet[0][x] for x in HEAD])
-            POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
-            TYP = ["C", "C", "D", "C", "C"]
-            gov, dep, dist = self.d_oracle.find_closest_parent(TYP, HEAD_n, POS, 0)
-            self.assertEqual(self.alphabet[0]["+1@VRB"], gov)
-            self.assertEqual(self.alphabet[1]["DELETION"], dep)
-            self.assertEqual(999999, dist)
-            # multiple deletion
-            HEAD = ["+2@VRB", "-1@ROOT", "-1@VRB", "-3@VRB", "-1@VRB"]
-            HEAD_n = torch.tensor([self.alphabet[0][x] for x in HEAD])
-            POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
-            TYP = ["D", "C", "D", "C", "C"]
-            gov, dep, dist = self.d_oracle.find_closest_parent(TYP, HEAD_n, POS, 3)
-            self.assertEqual(self.alphabet[0]["-1@VRB"], gov)
-            self.assertEqual(self.alphabet[1]["DELETION"], dep)
-            self.assertEqual(999999, dist)
-            # missing root and multiple deletion
-            HEAD = ["+2@VRB", "-1@ROOT", "-1@VRB", "-3@VRB", "-1@VRB"]
-            HEAD_n = torch.tensor([self.alphabet[0][x] for x in HEAD])
-            POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
-            TYP = ["C", "D", "D", "C", "C"]
-            gov, dep, dist = self.d_oracle.find_closest_parent(TYP, HEAD_n, POS, 0)
-            self.assertEqual(self.alphabet[0]["-1@ROOT"], gov)
-            self.assertEqual(self.alphabet[1]["DELETION"], dep)
-            self.assertEqual(3, dist)
-            # cycle coming back to itself
-            HEAD = ["+2@VRB", "-1@ROOT", "-2@VRB", "-3@VRB", "-1@VRB"]
-            HEAD_n = torch.tensor([self.alphabet[0][x] for x in HEAD])
-            POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
-            TYP = ["C", "D", "D", "C", "C"]
-            gov, dep, dist = self.d_oracle.find_closest_parent(TYP, HEAD_n, POS, 0)
-            self.assertEqual(self.alphabet[0]["-1@ROOT"], gov)
-            self.assertEqual(self.alphabet[1]["DELETION"], dep)
-            self.assertEqual(999999, dist)
-            # infinite loop cycle
-            HEAD = ["+2@VRB", "-1@ROOT", "-2@VRB", "-3@VRB", "-1@VRB"]
-            HEAD_n = torch.tensor([self.alphabet[0][x] for x in HEAD])
-            POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
-            TYP = ["D", "D", "D", "C", "C"]
-            gov, dep, dist = self.d_oracle.find_closest_parent(TYP, HEAD_n, POS, 3)
-            self.assertEqual(self.alphabet[0]["-1@ROOT"], gov)
-            self.assertEqual(self.alphabet[1]["DELETION"], dep)
-            self.assertEqual(999999, dist)
+    def test_colapse_root_deletion_insertion(self):
+        HEAD = ["+1@VRB", "-1@ROOT", "-1@ROOT", "-1@VRB"]
+        HEAD_n = [self.alphabet[0][x] for x in HEAD]
+        POS = ["INT", "CLS", "VRB", "INSERTION", "ADN", "ADJ"]
+        DIST = [99999, 99999, 0, 99999, 99999, 99999]
+        TYP = ['D','C','C','I','C','D']
+        #import pudb; pudb.set_trace()
+        x = self.d_oracle.collapse_root(HEAD_n, POS, TYP, DIST)
+        res = ["+1@VRB", "-1@ROOT", "-1@VRB", "-1@VRB"]
+        res_n = [self.alphabet[0][x] for x in res]
+        self.assertEqual(res_n, x)
+        
+        # exemple 2
+        HEAD = ['-1@ROOT', '+1@VRB', '-1@ROOT', '-1@VRB', '-1@VRB', '-1@VRB', '-1@NOUN', '-1@PRE']
+        HEAD_n = [self.alphabet[0][x] for x in HEAD]
+        POS = ['INSERTION', 'CLN', 'CLI', 'VRB', 'ADN', 'CLI', 'VRB', 'DET', 'NOUN', 'PRE', 'NOM']
+        TYP = ['I', 'C', 'D', 'C', 'C', 'S', 'D', 'D', 'C', 'C', 'C']
+        DIST= [999999, 99999, 999999, 0, 99999, 999999, 999999, 999999, 999999, 99999, 99999]
+        #import pudb; pudb.set_trace()
+        x = self.d_oracle.collapse_root(HEAD_n, POS, TYP, DIST)
+        res = ['+1@VRB', '+1@VRB', '-1@ROOT', '-1@VRB', '-1@VRB', '-1@VRB', '-1@NOUN', '-1@PRE']
+        res_n = [self.alphabet[0][x] for x in res]
+        self.assertEqual(res_n, x)
+
+
+
+    def test_find_closest_parent(self):
+        # one deletion
+        HEAD = ["+2@VRB", "-1@ROOT", "-1@VRB", "-2@VRB", "-1@VRB"]
+        HEAD_n = torch.tensor([self.alphabet[0][x] for x in HEAD])
+        POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
+        TYP = ["C", "C", "D", "C", "C"]
+        gov, dep, dist = self.d_oracle.find_closest_parent(TYP, HEAD_n, POS, 0)
+        self.assertEqual(self.alphabet[0]["+1@VRB"], gov)
+        self.assertEqual(self.alphabet[1]["DELETION"], dep)
+        self.assertEqual(999999, dist)
+        # multiple deletion
+        HEAD = ["+2@VRB", "-1@ROOT", "-1@VRB", "-3@VRB", "-1@VRB"]
+        HEAD_n = torch.tensor([self.alphabet[0][x] for x in HEAD])
+        POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
+        TYP = ["D", "C", "D", "C", "C"]
+        gov, dep, dist = self.d_oracle.find_closest_parent(TYP, HEAD_n, POS, 3)
+        self.assertEqual(self.alphabet[0]["-1@VRB"], gov)
+        self.assertEqual(self.alphabet[1]["DELETION"], dep)
+        self.assertEqual(999999, dist)
+        # missing root and multiple deletion
+        HEAD = ["+2@VRB", "-1@ROOT", "-1@VRB", "-3@VRB", "-1@VRB"]
+        HEAD_n = torch.tensor([self.alphabet[0][x] for x in HEAD])
+        POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
+        TYP = ["C", "D", "D", "C", "C"]
+        gov, dep, dist = self.d_oracle.find_closest_parent(TYP, HEAD_n, POS, 0)
+        self.assertEqual(self.alphabet[0]["-1@ROOT"], gov)
+        self.assertEqual(self.alphabet[1]["DELETION"], dep)
+        self.assertEqual(3, dist)
+        # cycle coming back to itself
+        HEAD = ["+2@VRB", "-1@ROOT", "-2@VRB", "-3@VRB", "-1@VRB"]
+        HEAD_n = torch.tensor([self.alphabet[0][x] for x in HEAD])
+        POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
+        TYP = ["C", "D", "D", "C", "C"]
+        gov, dep, dist = self.d_oracle.find_closest_parent(TYP, HEAD_n, POS, 0)
+        self.assertEqual(self.alphabet[0]["-1@ROOT"], gov)
+        self.assertEqual(self.alphabet[1]["DELETION"], dep)
+        self.assertEqual(999999, dist)
+        # infinite loop cycle
+        HEAD = ["+2@VRB", "-1@ROOT", "-2@VRB", "-3@VRB", "-1@VRB"]
+        HEAD_n = torch.tensor([self.alphabet[0][x] for x in HEAD])
+        POS = ["VRB", "VRB", "VRB", "VRB", "NOUN"]
+        TYP = ["D", "D", "D", "C", "C"]
+        gov, dep, dist = self.d_oracle.find_closest_parent(TYP, HEAD_n, POS, 3)
+        self.assertEqual(self.alphabet[0]["-1@ROOT"], gov)
+        self.assertEqual(self.alphabet[1]["DELETION"], dep)
+        self.assertEqual(999999, dist)
+
+if __name__ == "__main__":
+    unittest.main()

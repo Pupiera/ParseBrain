@@ -23,6 +23,7 @@ from parsebrain.processing.dependency_parsing.transition_based.configuration imp
 )
 
 
+# todo: update transition based arc eager with unshift + disallow reduce if the root element has no deps yet
 from transformers import CamembertModel, CamembertTokenizerFast
 
 
@@ -36,25 +37,44 @@ class Parser(sb.core.Brain):
         features = self.hparams.features_extractor.extract_features(
             tokens, tokens_conllu
         )
+
+        if hasattr(self.hparams, "encoder_rnn"):
+            features, hidden = self.hparams.encoder_rnn(features)
+        batch_size = features.shape[0]
         seq_len = torch.tensor([len(w) for w in batch.words]).to(self.device)
         config = []
         gold_config = []
         static = (
             self.hparams.number_of_epochs_static >= self.hparams.epoch_counter.current
         )
+        root_value = self.hparams.special_embedding(
+            torch.zeros((batch_size, 1)).to(self.device)
+        )
         if stage != sb.Stage.TEST:
-            for id, wrds, feat, head, dep in zip(
-                batch.sent_id, batch.words, features, batch.head, batch.dep_tokens
+            for id, wrds, feat, head, dep, root in zip(
+                batch.sent_id,
+                batch.words,
+                features,
+                batch.head,
+                batch.dep_tokens,
+                root_value,
             ):
-                # words_list.append(self.create_words_list(wrds))
-                config.append(Configuration(feat, self.create_words_list(wrds)))
+                config.append(
+                    Configuration(
+                        feat, self.create_words_list(wrds), root_embedding=root
+                    )
+                )
                 gold_config.append(GoldConfiguration(head, dep, id))
         else:
-            for wrds, feat, head, dep in zip(
-                batch.words, features, batch.head, batch.dep_tokens
+            for wrds, feat, head, dep, root in zip(
+                batch.words, features, batch.head, batch.dep_tokens, root_value
             ):
                 # words_list.append(self.create_words_list(wrds))
-                config.append(Configuration(feat, self.create_words_list(wrds)))
+                config.append(
+                    Configuration(
+                        feat, self.create_words_list(wrds), root_embedding=root
+                    )
+                )
         pos_log_prob = self.hparams.neural_network_POS(features)
         if sb.Stage.TRAIN == stage:
             parsing_dict = self.hparams.parser.parse(
@@ -71,7 +91,17 @@ class Parser(sb.core.Brain):
         words = batch.words
         pos = batch.pos_tokens.data.to(self.device)
         sent_ids = batch.sent_id
-
+        """
+        print(sent_ids)
+        print(stage)
+        print("DECISION")
+        print(parsing_dict["parse_log_prob"])
+        print(torch.exp(parsing_dict["parse_log_prob"]))
+        print(parsing_dict["decision_taken"])
+        print("ORACLE")
+        print(parsing_dict["oracle_parsing"])
+        print(parsing_dict["oracle_parse_len"])
+        """
         loss_pos = self.hparams.pos_cost(pos_log_prob, pos, length=seq_len)
         self.hparams.acc_dyna.append(
             parsing_dict["parse_log_prob"],
@@ -90,7 +120,7 @@ class Parser(sb.core.Brain):
             parsing_dict["oracle_label"],
             parsing_dict["oracle_label_len"],
         )
-        loss = 0.3 * loss_pos + 0.4 * loss_parse + 0.3 * loss_label
+        loss = 0.1 * loss_pos + 0.8 * loss_parse + 0.1 * loss_label
         # Populate the list that will be written at the end of the stage.
         if sb.Stage.VALID == stage:
             predicted_pos = [
@@ -103,12 +133,18 @@ class Parser(sb.core.Brain):
         return loss
 
     def _create_data_from_parsed_tree(self, parsed_tree, sent_ids, words, pos):
+        # Bug in the case of word not having an head.
         for p_t, sent, po, sent_id in zip(parsed_tree, words, pos, sent_ids):
-            self.data_valid.append({"sent_id": sent_id, "sentence": []})
-            root = None
+            self.data_valid[sent_id] = {"sent_id": sent_id, "sentence": []}
+            r = [w["head"] == 0 for k, w in p_t.items()]
+            has_root = any(r)
+            if has_root:
+                root_position = r.index(True) + 1
             for i in range(len(sent)):
                 if i + 1 in p_t.keys():
-                    self.data_valid[-1]["sentence"].append(
+                    if p_t[i + 1]["head"] == 0:
+                        p_t[i + 1]["label"] = dep_label_dict["root"]
+                    self.data_valid[sent_id]["sentence"].append(
                         {
                             "ID": i + 1,
                             "FORM": sent[i],
@@ -119,9 +155,9 @@ class Parser(sb.core.Brain):
                             ),
                         }
                     )
-                elif root is None:
+                elif not has_root:
                     # If no head, this is the root
-                    self.data_valid[-1]["sentence"].append(
+                    self.data_valid[sent_id]["sentence"].append(
                         {
                             "ID": i + 1,
                             "FORM": sent[i],
@@ -130,17 +166,23 @@ class Parser(sb.core.Brain):
                             "DEPREL": "root",
                         }
                     )
-                    root = i + 1
+                    root_position = i + 1
                 else:
-                    self.data_valid[-1]["sentence"].append(
+                    self.data_valid[sent_id]["sentence"].append(
                         {
                             "ID": i + 1,
                             "FORM": sent[i],
                             "UPOS": po[i],
-                            "HEAD": root,
+                            "HEAD": root_position,
                             "DEPREL": "DEFAULT_ROOT",
                         }
                     )
+
+    def on_stage_start(self, stage, epoch):
+        """Gets called at the beginning of each epoch"""
+        if stage != sb.Stage.TRAIN:
+            self.hparams.acc_dyna.correct = 0
+            self.hparams.acc_dyna.total = 0
 
     def on_stage_end(self, stage, stage_loss, epoch=None):
         stage_stats = {"loss": stage_loss}
@@ -150,7 +192,7 @@ class Parser(sb.core.Brain):
         if stage == sb.Stage.VALID:  # metrics value
             with open(self.hparams.file_valid, "w", encoding="utf-8") as f_v:
                 write_token_dict_conllu(self.data_valid, f_v)
-            self.data_valid = []
+            self.data_valid = {}
             d = types.SimpleNamespace()
             d.system_file = self.hparams.file_valid
             d.gold_file = self.hparams.valid_conllu
@@ -213,6 +255,11 @@ class Parser(sb.core.Brain):
         for i, w in enumerate(words):
             words_list.append(Word(w, i + 1))
         return words_list
+
+    def count_param_module(self):
+        for key, value in self.modules.items():
+            print(key)
+            print(sum(p.numel() for p in value.parameters()))
 
 
 # Define custom data procedure
@@ -408,11 +455,11 @@ def main():
         run_opts=run_opts,
         checkpointer=hparams["checkpointer"],
     )
+    print(brain.device)
     brain.hparams.features_extractor.set_model(camembert)
     brain.tokenizer = tokenizer
-    for param in brain.hparams.modules["lm_model"].parameters():
-        param.require_grad = False
-    brain.data_valid = []
+    brain.data_valid = {}
+    brain.count_param_module()
     brain.fit(
         brain.hparams.epoch_counter,
         train_data,
@@ -427,9 +474,9 @@ def main():
 if __name__ == "__main__":
     import cProfile, pstats
 
-    profiler = cProfile.Profile()
-    profiler.enable()
+    # profiler = cProfile.Profile()
+    # profiler.enable()
     main()
-    profiler.disable()
-    stats = pstats.Stats(profiler).sort_stats("cumtime")
-    stats.print_stats()
+    # profiler.disable()
+    # stats = pstats.Stats(profiler).sort_stats("cumtime")
+    # stats.print_stats()

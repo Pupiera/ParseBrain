@@ -20,6 +20,8 @@ class DynamicItemDatasetConllu(sb.dataio.dataset.DynamicItemDataset):
         replacements: dict = {},
         dynamic_items: List = [],
         output_keys: List = [],
+        UD=False,
+        blackListed_value={}
     ):
-        data = load_data_conllu(conllu_path, keys, replacements)
+        data = load_data_conllu(conllu_path, keys, replacements, UD, blackListed_value)
         return cls(data, dynamic_items, output_keys)

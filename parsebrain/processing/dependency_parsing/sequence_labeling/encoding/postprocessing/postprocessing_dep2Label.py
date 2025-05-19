@@ -104,6 +104,7 @@ class LabelPostProcessor_dep2Label:
         root = "root"
         for candidate in decoded_words:
             candidate_for_root = decoded_words[candidate]
+            candidate_for_root[6] = candidate_for_root[6].lower()
             if candidate_for_root[6] == root:
                 candidate_for_root[5] = 0
                 candidates_for_root.update({candidate: candidate_for_root})
@@ -122,6 +123,7 @@ class LabelPostProcessor_dep2Label:
                     headless_words.pop(candidate_index)
 
     def assign_root_index_one(self, decoded_words, headless_nodes):
+        # print(decoded_words)
         update_node = decoded_words[1]
         update_node[5] = 0
         update_node[6] = "root"
@@ -220,6 +222,7 @@ class CoNLLPostProcessor:
 
     def write_to_file(self, dict_with_sent, f, order):
         output_f = open(f, "w")
+        print(dict_with_sent)
         for index_sentence in order:
             output_f.write("# sent_id = " + index_sentence)
             output_f.write("\n")
@@ -300,7 +303,7 @@ class CoNLLPostProcessor:
             f_conll.write(line)
         f_conll.close()
 
-    def evaluate_dependencies(self, gold, path_output, path_smgl):
+    def evaluate_dependencies(self, gold, path_output, path_smgl, gold_segmentation = False):
         # EVALUATE on conllu
 
         subparser = ArgumentParser()
@@ -316,21 +319,31 @@ class CoNLLPostProcessor:
             "alignment_file", type=str, help="Path of the alignment_file"
         )
         subparser.add_argument(
+            "--gold_segmentation", 
+            default=False, 
+            action="store_true",
+            help="Using gold segmentation or not (ie no need to align)",
+        )
+        subparser.add_argument(
             "--verbose",
             "-v",
             default=False,
             action="store_true",
             help="Print all metrics.",
         )
+
         subparser.add_argument(
-            "--counts",
-            "-c",
+        "--counts",
+        "-c",
             default=False,
             action="store_true",
             help="Print raw counts of correct/gold/system/aligned words instead of prec/rec/F1 for all metrics.",
         )
 
-        subargs = subparser.parse_args([gold, path_output, path_smgl])
+        if gold_segmentation:
+            subargs = subparser.parse_args([gold, path_output, path_smgl, "--gold_segmentation"])
+        else:
+            subargs = subparser.parse_args([gold, path_output, path_smgl])
 
         # Evaluate
         evaluation = self.eval_st.evaluate_wrapper(subargs)

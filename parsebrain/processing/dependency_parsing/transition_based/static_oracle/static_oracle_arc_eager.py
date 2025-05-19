@@ -16,14 +16,14 @@ from parsebrain.processing.dependency_parsing.transition_based.static_oracle imp
 )
 
 """
-The function compute_sequence is very generic. Maybe for other static oracle, 
+The function compute_sequence is very generic. Maybe for other static alignment_oracle, 
 we can create subclass from it and only define best_decision
-Note for the arc eager oracle, if the sentence is non-projective, it won't manage to create tree. 
+Note for the arc eager alignment_oracle, if the sentence is non-projective, it won't manage to create tree. 
 """
 
 
 class StaticOracleArcEager(StaticOracle):
-    def __init__(self, padding_value: int = 1000):
+    def __init__(self, padding_value: int = -100):
         super().__init__(padding_value)
         self.transition = ArcEagerTransition()
 
@@ -49,6 +49,7 @@ class StaticOracleArcEager(StaticOracle):
             current_config = Configuration(
                 [x for x in gc.heads.keys()],
                 [Word(str(x), x) for x in gc.heads.keys()],
+                root_embedding=None,
             )
             while not self.transition.is_terminal(current_config):
                 decision = self.best_decision(current_config, gc)

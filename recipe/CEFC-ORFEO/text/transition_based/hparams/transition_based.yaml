@@ -1,5 +1,5 @@
 # Seed needs to be set at top of yaml, before objects with parameters are made
-seed: 1234
+seed: 1235
 __set_seed: !!python/object/apply:torch.manual_seed [ !ref <seed> ]
 output_folder: !ref results/Orfeo_arc_eager/<seed>
 wer_file: !ref <output_folder>/wer.txt
@@ -8,8 +8,8 @@ train_log: !ref <output_folder>/train_log.txt
 
 #Data files
 data_folder: /home/getalp/pupiera/thesis/endtoend_asr_multitask/src/conllu/gold/ #/home/pupiera/getalp/pupiera/conllu/gold
-train_conllu: !ref <data_folder>/orfeo_shuf_no_proj.train #!ref <data_folder>/orfeo_shuf.mini_train #
-valid_conllu: !ref <data_folder>/orfeo_shuf.dev #!ref <data_folder>/orfeo_shuf.mini_train #!ref <data_folder>/orfeo_shuf.dev
+train_conllu: !ref <data_folder>/orfeo_shuf.mini_train #!ref <data_folder>/orfeo_shuf_no_proj_no_multiroot.train #!ref <data_folder>/orfeo_shuf.mini_train #
+valid_conllu: !ref <data_folder>/orfeo_shuf.mini_train #!ref <data_folder>/orfeo_shuf.dev #!ref <data_folder>/orfeo_shuf.mini_train #!ref <data_folder>/orfeo_shuf.dev
 test_conllu: !ref <data_folder>/orfeo_shuf.test
 
 # Specific information related to conllu file
@@ -21,8 +21,8 @@ conllu_keys: [ 'lineNumber', 'words', 'lemmas','POS','UPOS','tags',
 # With data_parallel batch_size is split into N jobs
 # With DDP batch_size is multiplied by N jobs
 # Must be 6 per GPU to fit 16GB of VRAM
-batch_size: 16 #8
-test_batch_size: 32 #4
+batch_size: 8 #8
+test_batch_size: 16 #4
 
 dataloader_options:
   batch_size: !ref <batch_size>
@@ -47,17 +47,6 @@ tokenizer: !new:sentencepiece.SentencePieceProcessor
 
 embedding_dim: 768
 
-# LM
-lm_model: !new:parsebrain.speechbrain_custom.lobes.models.transformer.transformerLM.TransformerLM
-  vocab: 32005 #Need to be the same as tranformer tokenizer (BPE). from tokenizer.vocab_size: 32005
-  d_model: !ref <embedding_dim> #base size
-  nhead: 12 # base
-  num_encoder_layers: 12
-  num_decoder_layers: 0
-  d_ffn: 3072
-  dropout: 0.0
-  activation: !name:torch.nn.GELU
-  normalize_before: False
 
 # Features extractor
 
@@ -75,62 +64,42 @@ ckpt_interval_minutes: 30 # save checkpoint every N minutes
 # Parser
 #
 
-#neural_network: !new:speechbrain.nnet.containers.Sequential
-#  input_shape: [ null, null, 768 ]
-#  RNN1: !name:speechbrain.nnet.RNN.LSTM
-#    hidden_size: 1024
-#    num_layers: 1
-#    bias: True
-#    bidirectional: False
-#  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
-#  activation: !new:torch.nn.LeakyReLU
-#  drop: !new:torch.nn.Dropout
-#    p: 0.15
-#  linear2: !name:speechbrain.nnet.linear.Linear
-#    n_neurons: 1024
-#    bias: True
-#  bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
-#  activation2: !new:torch.nn.LeakyReLU
-#  drop2: !new:torch.nn.Dropout
-#    p: 0.15
-#  linear3: !name:speechbrain.nnet.linear.Linear
-#    n_neurons: 1024
-#    bias: True
-#  bn3: !name:speechbrain.nnet.normalization.BatchNorm1d
-#  activation3: !new:torch.nn.LeakyReLU
-#  linear_head: !name:speechbrain.nnet.linear.Linear
-#    n_neurons: !ref <number_transitions>
-#    bias: True
-#  log_softmax: !new:speechbrain.nnet.activations.Softmax
-#    apply_log: False
-
 #
 # Transition (UAS)
 #
 
-concat_embed_dim: !ref <stack_depth_computer> + <embedding_dim>
 
+# root + padding stack + padding buffer
+special_embedding : !new:speechbrain.nnet.embedding.Embedding
+  num_embeddings: 3
+  embedding_dim: !ref <embedding_dim>
+  consider_as_one_hot: False
+
+concat_embed_len: !ref <stack_depth_computer> + 1
+
+input_nn: !ref <concat_embed_len> * <embedding_dim>
+
+# maybe juste add layer here ?
+# + Maybe refactorize the this enc and remove the head to have a shared representation for the label computations.
 neural_network: !new:speechbrain.nnet.containers.Sequential
-  input_shape: [ null, null, 1536 ]
+  input_shape: [ null, null, !ref <input_nn> ]
   linear1: !name:speechbrain.nnet.linear.Linear
     n_neurons: 1024
     bias: True
-  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  ln1: !name:speechbrain.nnet.normalization.LayerNorm
   activation1: !new:torch.nn.LeakyReLU
   drop: !new:torch.nn.Dropout
-    p: 0.40
+    p: 0.2
   linear2: !name:speechbrain.nnet.linear.Linear
     n_neurons: 1024
     bias: True
-  bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
-  activation2: !new:torch.nn.LeakyReLU
+  ln2: !name:speechbrain.nnet.normalization.LayerNorm
   drop2: !new:torch.nn.Dropout
-    p: 0.40
+    p: 0.2
+  activation2: !new:torch.nn.LeakyReLU
   linear_head: !name:speechbrain.nnet.linear.Linear
     n_neurons: !ref <number_transitions>
     bias: True
-  log_softmax: !new:speechbrain.nnet.activations.Softmax
-    apply_log: True
 
 number_transitions: 4
 transition: !new:parsebrain.processing.dependency_parsing.transition_based.transition.ArcEagerTransition
@@ -138,19 +107,21 @@ transition: !new:parsebrain.processing.dependency_parsing.transition_based.trans
 #
 # Label (LAS)
 #
+
+
 neural_network_label: !new:speechbrain.nnet.containers.Sequential
     input_shape: [null, null, 1536]
     linear1: !name:speechbrain.nnet.linear.Linear
         n_neurons: 1024
         bias: True   
-    bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+    ln1: !name:speechbrain.nnet.normalization.LayerNorm
     activation: !new:torch.nn.LeakyReLU
     drop: !new:torch.nn.Dropout
         p: 0.15
     linear2: !name:speechbrain.nnet.linear.Linear
         n_neurons: 1024
         bias: True
-    bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
+    ln2: !name:speechbrain.nnet.normalization.LayerNorm
     activation2: !new:torch.nn.LeakyReLU
     linear_head: !name:speechbrain.nnet.linear.Linear
       n_neurons: !ref <number_label>
@@ -165,21 +136,21 @@ number_label: 17
 #
 
 neural_network_POS: !new:speechbrain.nnet.containers.Sequential
-  input_shape: [ null, null, 768 ]
+  input_shape: [ null, null, !ref <embedding_dim> ]
   linear1: !name:speechbrain.nnet.linear.Linear
     n_neurons: 1024
     bias: True
-  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  ln1: !name:speechbrain.nnet.normalization.LayerNorm
   activation: !new:torch.nn.LeakyReLU
   drop: !new:torch.nn.Dropout
-    p: 0.50
+    p: 0.3
   linear2: !name:speechbrain.nnet.linear.Linear
     n_neurons: 1024
     bias: True
-  bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
+  ln2: !name:speechbrain.nnet.normalization.LayerNorm
   activation2: !new:torch.nn.LeakyReLU
   drop2: !new:torch.nn.Dropout
-    p: 0.50
+    p: 0.3
   linear_head: !name:speechbrain.nnet.linear.Linear
     n_neurons: !ref <number_POS>
     bias: True
@@ -188,14 +159,14 @@ neural_network_POS: !new:speechbrain.nnet.containers.Sequential
 
 number_POS: 22
 
-stack_depth_computer: 1
+stack_depth_computer: 2
 
 features_computer: !new:parsebrain.processing.dependency_parsing.transition_based.configuration_features_computer.ConfigurationFeaturesComputerConcat
   stack_depth: !ref <stack_depth_computer>
   dim: !ref <embedding_dim>
+  embedding: !ref <special_embedding>
 
 dynamic_oracle: !new:parsebrain.processing.dependency_parsing.transition_based.dynamic_oracle.DynamicOracleArcEager
-static_oracle: !new:parsebrain.processing.dependency_parsing.transition_based.static_oracle.StaticOracleArcEager
 
 label_parser: !new:parsebrain.processing.dependency_parsing.transition_based.label.LabelPolicieEmbedding
 
@@ -206,7 +177,6 @@ parser: !new:parsebrain.processing.dependency_parsing.transition_based.Transitio
   dynamic_oracle: !ref <dynamic_oracle>
   label_policie: !ref <label_parser>
   label_neural_network: !ref <neural_network_label>
-  static_oracle: !ref <static_oracle>
   exploration_rate: 0.5
 
 parse_cost: !name:speechbrain.nnet.losses.nll_loss
@@ -236,13 +206,13 @@ epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
   limit: !ref <number_of_epochs>
 
 modules:
-  lm_model: !ref <lm_model>
   parser: !ref <neural_network>
   label_parser: !ref <neural_network_label>
   pos_network: !ref <neural_network_POS>
+  special_embedding: !ref <special_embedding>
 
 model: !new:torch.nn.ModuleList
-  - [ !ref <lm_model>, !ref <neural_network>, !ref <neural_network_label>, !ref <neural_network_POS> ]
+  - [ !ref <neural_network>, !ref <neural_network_label>, !ref <neural_network_POS>, !ref <special_embedding> ]
 #
 # Metrics
 #
@@ -254,7 +224,7 @@ eval_conll: !name:parsebrain.processing.dependency_parsing.eval.conll18_ud_eval.
 # CONLLU output file
 #
 
-file_valid: "Orfeo_Camembert_base_VALID.debug"
+file_valid: !ref <output_folder>/output_VALID.conll
 
 #
 # Checkpointer
@@ -266,16 +236,5 @@ checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
     model: !ref <model>
     #scheduler_model: !ref <lr_annealing_model>
     counter: !ref <epoch_counter>
-
-# pretrainer to load pretrained LM
-#pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
-#  collect_in: !ref <save_folder>
-#  loadables:
-#    lm: !ref <lm_model>
-#    tokenizer: !ref <tokenizer>
-#  paths:
-#    lm: !ref <pretrained_lm_path>/pytorch_model.bin # Camembert
-#    tokenizer: !ref <pretrained_lm_path>/sentencepiece.bpe.model # Camembert
-
 
 

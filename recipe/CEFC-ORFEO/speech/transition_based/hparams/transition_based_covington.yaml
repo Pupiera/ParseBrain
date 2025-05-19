@@ -1,0 +1,390 @@
+# Seed needs to be set at top of yaml, before objects with parameters are made
+seed: 1234
+__set_seed: !!python/object/apply:torch.manual_seed [ !ref <seed> ]
+output_folder: !ref results/Orfeo_arc_eager/<seed>
+wer_file: !ref <output_folder>/wer.txt
+save_folder: !ref <output_folder>/save
+train_log: !ref <output_folder>/train_log.txt
+
+
+# URL for the biggest LeBenchmark wav2vec french.
+wav2vec2_hub: LeBenchmark/wav2vec2-FR-7K-large
+
+
+
+# Data files
+data_folder:  /home/getalp/data/ASR_data/FR/CORPUS_AUDIO/cefc-orfeo_v.1.5_december2021/11/oral  # e.g, /localscratch/cv-corpus-5.1-2020-06-22/fr
+train_tsv_file: !ref <data_folder>/train.tsv  # Standard CommonVoice .tsv files
+dev_tsv_file: !ref <data_folder>/dev.tsv  # Standard CommonVoice .tsv files
+test_tsv_file: !ref <data_folder>/test.tsv  # Standard CommonVoice .tsv files
+accented_letters: True
+language: fr # use 'it' for Italian, 'rw' for Kinyarwanda, 'en' for english
+train_csv: !ref <save_folder>/train.csv
+valid_csv: !ref <save_folder>/dev.csv
+test_csv: !ref <save_folder>/test.csv
+skip_prep: True # Skip data preparation
+
+#
+# Conllu gold file (EVAL)
+#
+
+dir_gold_conllu: /home/getalp/pupiera/thesis/endtoend_asr_multitask/src/conllu/gold/ #/home/pupiera/getalp/pupiera/conllu/gold
+train_conllu: !ref <dir_gold_conllu>/orfeo_shuf.train #!ref <data_folder>/orfeo_shuf.train
+valid_conllu: !ref <dir_gold_conllu>/orfeo_shuf.dev #!ref <data_folder>/orfeo_shuf.dev
+test_conllu: !ref <dir_gold_conllu>/orfeo_shuf.test
+
+#Data augmentation
+
+augmentation: !new:speechbrain.lobes.augment.TimeDomainSpecAugment
+    sample_rate: !ref <sample_rate>
+    speeds: [95, 100, 105]
+
+
+# Specific information related to conllu file
+conllu_keys: [ 'lineNumber', 'words', 'lemmas','POS','UPOS','tags',
+               'HEAD','DEP','tags2','tags3','timestamp_begin',
+               'timestamp_end','speaker' ]
+
+avoid_if_longer_than: 10.0
+
+
+# With data_parallel batch_size is split into N jobs
+# With DDP batch_size is multiplied by N jobs
+# Must be 6 per GPU to fit 16GB of VRAM
+batch_size: 8 #8
+test_batch_size: 4 #4
+
+dataloader_options:
+  batch_size: !ref <batch_size>
+  num_workers: 8
+test_dataloader_options:
+  batch_size: !ref <test_batch_size>
+  num_workers: 8
+
+
+
+# Decoding parameters
+# Be sure that the bos and eos index match with the BPEs ones
+blank_index: 0
+bos_index: 1
+eos_index: 2
+
+
+#tokenizer
+token_type: char  # ["unigram", "bpe", "char"]
+character_coverage: 1.0
+
+#
+#Model parameters
+#
+
+activation: !name:torch.nn.LeakyReLU
+dnn_layers: 3
+dnn_neurons: 1024
+emb_size: 128
+dec_neurons: 1024
+freeze_wav2vec: False
+
+
+# Training parameters
+number_of_epochs: 10
+number_of_epochs_static: 5
+
+lr_wav2vec: 0.0001
+sorting: ascending
+auto_mix_prec: False
+
+sample_rate: 16000
+ckpt_interval_minutes: 30 # save checkpoint every N minutes
+
+
+
+#
+# wav2vec2
+#
+
+wav2vec2: !new:speechbrain.lobes.models.huggingface_wav2vec.HuggingFaceWav2Vec2
+    source: !ref <wav2vec2_hub>
+    output_norm: True
+    freeze: !ref <freeze_wav2vec>
+    save_path: !ref <save_folder>/wav2vec2_checkpoint
+
+
+#
+# Encoder (after wav2vec2)
+#
+
+enc: !new:speechbrain.nnet.containers.Sequential
+    input_shape: [null, null, 1024]
+    linear1: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1024
+        bias: True
+    bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+    activation: !new:torch.nn.LeakyReLU
+    drop: !new:torch.nn.Dropout
+        p: 0.15
+    linear2: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1024
+        bias: True
+    bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
+    activation2: !new:torch.nn.LeakyReLU
+    drop2: !new:torch.nn.Dropout
+        p: 0.15
+    linear3: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1024
+        bias: True
+    bn3: !name:speechbrain.nnet.normalization.BatchNorm1d
+    activation3: !new:torch.nn.LeakyReLU
+
+
+
+#
+# Fusion of wav2vec2 representation
+#
+
+repFusionHidden: 768
+repFusionBidirectional: False
+repFusionLayers: 2
+RepFusionModel: !new:speechbrain.nnet.RNN.LSTM
+    input_shape: [null, null, 1024] # enc val
+    hidden_size: !ref <repFusionHidden>
+    num_layers: !ref <repFusionLayers>
+    bias: True
+    dropout: 0.5
+    bidirectional: !ref <repFusionBidirectional>
+
+
+#
+# FEAT
+#
+input_size: !ref <repFusionHidden>
+featHidden: 768
+feat: !new:speechbrain.nnet.RNN.LSTM
+  input_shape: [null, null, !ref <input_size>]
+  hidden_size: !ref <featHidden>
+  num_layers: 2
+  bias: True
+  dropout: 0.5
+  bidirectional: True
+
+
+#
+# CTC
+#
+
+output_neurons: 76 # size of CTC
+ctc_lin: !new:speechbrain.nnet.linear.Linear
+    input_size: !ref <dnn_neurons>
+    n_neurons: !ref <output_neurons>
+
+log_softmax: !new:speechbrain.nnet.activations.Softmax
+    apply_log: True
+
+
+#
+# Transition (UAS)
+#
+embedding_dim: !ref <featHidden> *2
+input_UAS_shape: !ref <embedding_dim> *2  #!ref <embedding_dim> * !ref <depth>+1
+concat_embed_dim: !ref <stack_depth_computer> + !ref <embedding_dim>
+
+neural_network: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, 3072 ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  activation1: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.40
+  linear_head: !name:speechbrain.nnet.linear.Linear
+    n_neurons: !ref <number_transitions>
+    bias: True
+  log_softmax: !new:speechbrain.nnet.activations.Softmax
+    apply_log: True
+
+number_transitions: 4
+transition: !new:parsebrain.processing.dependency_parsing.transition_based.transition.ArcEagerTransition
+
+#
+# Label (LAS)
+#
+input_LAS_shape: !ref <embedding_dim> *2
+neural_network_label: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, 3072 ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  activation1: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.40
+  linear_head: !name:speechbrain.nnet.linear.Linear
+    n_neurons: !ref <number_label>
+    bias: True
+  log_softmax: !new:speechbrain.nnet.activations.Softmax
+    apply_log: True
+
+number_label: 17      
+
+#
+# UPOS
+# Maybe delete linear1 in every single head to force shared rep in enc.
+
+
+input_pos_shape: !ref <embedding_dim>
+neural_network_POS: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, !ref <input_pos_shape> ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  activation1: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.40
+  linear_head: !name:speechbrain.nnet.linear.Linear
+    n_neurons: !ref <number_POS>
+    bias: True
+  log_softmax: !new:speechbrain.nnet.activations.Softmax
+    apply_log: True
+
+number_POS: 22
+
+#
+# Parser options
+#
+
+stack_depth_computer: 1
+
+features_computer: !new:parsebrain.processing.dependency_parsing.transition_based.configuration_features_computer.ConfigurationFeaturesComputerConcat
+  stack_depth: !ref <stack_depth_computer>
+  dim: !ref <embedding_dim>
+
+dynamic_oracle: !new:parsebrain.processing.dependency_parsing.transition_based.dynamic_oracle.DynamicOracleArcEager
+static_oracle: !new:parsebrain.processing.dependency_parsing.transition_based.static_oracle.StaticOracleArcEager
+
+label_parser: !new:parsebrain.processing.dependency_parsing.transition_based.label.LabelPolicieEmbedding
+
+parser: !new:parsebrain.processing.dependency_parsing.transition_based.TransitionBasedParser
+  neural_network: !ref <neural_network>
+  transition: !ref <transition>
+  features_computer: !ref <features_computer>
+  dynamic_oracle: !ref <dynamic_oracle>
+  label_policie: !ref <label_parser>
+  label_neural_network: !ref <neural_network_label>
+  static_oracle: !ref <static_oracle>
+  exploration_rate: 0.5
+
+
+
+#
+# Cost function (Loss)
+#
+
+ctc_cost_weight: 0.4
+ctc_cost: !name:speechbrain.nnet.losses.ctc_loss
+    blank_index: !ref <blank_index>
+
+parse_cost_weight: 0.2
+parse_cost: !name:speechbrain.nnet.losses.nll_loss
+  reduction: "mean"
+
+label_cost_weight: 0.2
+label_cost: !name:speechbrain.nnet.losses.nll_loss
+  reduction: "mean"
+
+pos_cost_weight: 0.2
+pos_cost: !name:speechbrain.nnet.losses.nll_loss
+  reduction: "mean"
+
+#
+# Optimizer
+#
+
+lr: 1.0
+model_opt_class: !name:torch.optim.Adadelta
+  lr: !ref <lr>
+  rho: 0.95
+  eps: 1.e-8
+
+wav2vec_opt_class: !name:torch.optim.Adam
+    lr: !ref <lr_wav2vec>
+
+#
+# Annealing
+#
+
+lr_annealing_model: !new:speechbrain.nnet.schedulers.NewBobScheduler
+    initial_value: !ref <lr>
+    improvement_threshold: 0.0025
+    annealing_factor: 0.8
+    patient: 0
+
+lr_annealing_wav2vec: !new:speechbrain.nnet.schedulers.NewBobScheduler
+    initial_value: !ref <lr_wav2vec>
+    improvement_threshold: 0.0025
+    annealing_factor: 0.9
+    patient: 0
+
+
+#
+# Module and epoch
+#
+
+epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+  limit: !ref <number_of_epochs>
+
+modules:
+  wav2vec2: !ref <wav2vec2>
+  enc: !ref <enc>
+  ctc_lin: !ref <ctc_lin>
+  RepFusionModel: !ref <RepFusionModel>
+  feat: !ref <feat>
+  parser: !ref <neural_network>
+  label_parser: !ref <neural_network_label>
+  pos_network: !ref <neural_network_POS>
+
+model: !new:torch.nn.ModuleList
+  - [!ref <enc>, !ref <ctc_lin>, !ref <RepFusionModel>, !ref <feat>,
+     !ref <neural_network>, !ref <neural_network_label>, !ref <neural_network_POS> ]
+#
+# Metrics
+#
+
+error_rate_computer: !name:speechbrain.utils.metric_stats.ErrorRateStats
+
+cer_computer: !name:speechbrain.utils.metric_stats.ErrorRateStats
+    split_tokens: True
+
+acc_dyna: !new:speechbrain.utils.Accuracy.AccuracyStats
+
+eval_conll: !name:parsebrain.processing.dependency_parsing.eval.conll18_ud_eval.evaluate_wrapper
+
+#
+# CONLLU output file
+#
+
+file_valid: "Orfeo_Camembert_base_VALID.debug"
+
+
+#
+# logger
+#
+
+
+train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
+    save_file: !ref <train_log>
+
+#
+# Checkpointer
+#
+
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+  checkpoints_dir: !ref <save_folder>
+  recoverables:
+    model: !ref <model>
+    wav2vec2: !ref <wav2vec2>
+    scheduler_model: !ref <lr_annealing_model>
+    scheduler_wav2vec: !ref <lr_annealing_wav2vec>
+    counter: !ref <epoch_counter>
+
+
+
+
