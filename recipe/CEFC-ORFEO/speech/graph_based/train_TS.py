@@ -3,6 +3,9 @@ import sys
 import torch
 from tqdm import tqdm
 import time
+import types
+from typing import NamedTuple
+
 
 import speechbrain as sb
 import torchaudio
@@ -15,10 +18,13 @@ from speechbrain.utils.distributed import run_on_main
 from torch.utils.data import DataLoader
 from speechbrain.dataio.dataloader import LoopedLoader
 
-
+from parsebrain.dataio.pred_to_file.pred_to_conllu import write_token_dict_conllu
 from parsebrain.speechbrain_custom.decoders.ctc import ctc_greedy_decode
 from torch.nn.utils.rnn import pad_sequence
 import logging
+
+# ---------------------Scoring import----------------------#
+from parsebrain.processing.dependency_parsing.graph_based import score_to_tree
 
 
 # --------------------------------------- Alignment import --------------------------------#
@@ -47,7 +53,6 @@ Authors
 """
 
 INTRA_EPOCH_CKPT_FLAG = "brain_intra_epoch_ckpt"
-
 
 # -----------------------------------------------------------BRAIN ASR---------------------------------------------#
 # Define training procedure
@@ -87,49 +92,143 @@ class ASR(sb.core.Brain):
                 wavs = self.hparams.augmentation(wavs, wav_lens)
 
         # Forward pass ASR
-
+        batch_size = wavs.shape[0]
         feats = self.modules.wav2vec2(wavs)
-        
-        if hasattr(self.hparams, "syntax_layers"):
-            x_syntax = feats[int(self.hparams.syntax_layers)]
-            feats = feats[-1]
-
-
         x = self.modules.enc(feats)  # [batch,time,1024]
         logits = self.modules.ctc_lin(x)  # [batch,time,76]
         # [batch,time,76] (76 in output neurons corresponding to BPE size)
         p_ctc = self.hparams.log_softmax(logits)
         # Forward pass dependency parsing
-        result = {"p_ctc": p_ctc, "wav_lens": wav_lens}
+        length = torch.tensor([int(wav_len * x.shape[1]) for wav_len in wav_lens])
+        result = {"p_ctc": p_ctc, "wav_lens": wav_lens, "length": length}
         if self.is_training_syntax:
             sequence, mapFrameToWord = ctc_greedy_decode(
                 p_ctc, wav_lens, blank_id=self.hparams.blank_index
             )
-            if hasattr(self.hparams, "syntax_layers"):
-                input_dep, seq_len = self._create_inputDep(x_syntax, mapFrameToWord)
-            else:
-                input_dep, seq_len = self._create_inputDep(x, mapFrameToWord)
+            #BIO from gold TS
+
+            start_words = batch.start_words.data
+            end_words = batch.end_words.data
+            bio = self.compute_bio(p_ctc, length, start_words, end_words)
+            map_frame_to_word = self.colapse_bio(bio)
+            predicted_timestamp = self.compute_timestamp_from_BIO(bio)
+            input_dep, seq_len = self._create_inputDep(x, map_frame_to_word)
             input_dep = input_dep.to(self.device)
-            seq_len = seq_len.to(self.device)
+            # Add a dummy root embedding. Important for graph based computation.
+            embedding_root = self.modules.embedding_root(
+                torch.zeros((batch_size, 1)).to(self.device)
+            ).to(self.device)
+            input_dep = torch.cat((embedding_root, input_dep), dim=1)
+            # Need to add one to the seq len since we added the dummy root.
+
+            x = torch.ones((batch_size)).to(self.device)
+            seq_len = torch.add(seq_len.to(self.device), x).to(
+                dtype=torch.long, device=self.device
+            )
+
             batch_len = input_dep.shape[0]
             # init hidden to zeros for each sentence
-            hidden = torch.zeros(4, batch_len, 800, device=self.device)
-            cell = torch.zeros(4, batch_len, 800, device=self.device)
-            lstm_out, _ = self.modules.dep2LabelFeat(input_dep, (hidden, cell))
-            logits_posLabel = self.modules.posDep2Label(lstm_out)
-            p_posLabel = self.hparams.log_softmax(logits_posLabel)
-            logits_depLabel = self.modules.depDep2Label(lstm_out)
-            p_depLabel = self.hparams.log_softmax(logits_depLabel)
-            logits_govLabel = self.modules.govDep2Label(lstm_out)
-            p_govLabel = self.hparams.log_softmax(logits_govLabel)
+            features, _ = self.modules.rnn(input_dep)
+            pos_scores, arc_scores, dep_scores = self.modules.graph_parser(features)
+            arc_scores = self.hparams.log_softmax(arc_scores)
+            dep_scores = self.hparams.log_softmax(dep_scores)
+
             result_parsing = {
-                "p_posLabel": p_posLabel,
-                "p_depLabel": p_depLabel,
-                "p_govLabel": p_govLabel,
+                "p_TS" : predicted_timestamp,
+                "pos_scores": pos_scores,
+                "dep_scores": dep_scores,
+                "arc_scores": arc_scores,
                 "seq_len": seq_len,
             }
             result = {**result, **result_parsing}
         return result
+
+    def compute_timestamp_from_BIO(self, tensor):
+        '''
+        return a list of dict where the key correpsond to the postion of the word in the sequence
+        '''
+        all_indice = []
+        frame_duration = 0.025
+        dim=0
+        for i in range(tensor.size(dim)):
+            unique_values, unique_indices = torch.unique(tensor[i], return_inverse=True)
+            indices_dict = {}
+            for i, value in enumerate(unique_values):
+                indices = (unique_indices == i).nonzero().view(-1)
+                indices_dict[value.item()] = {'first': indices[0].item() * frame_duration, 'last': indices[-1].item() * frame_duration}
+            all_indice.append(indices_dict)
+
+        return all_indice
+
+
+    def colapse_bio(self, decoded_bio):
+        '''
+        There may be some optimized way to compute this (like taking the most likely path
+        while keeping the constraint of each word begining by B).
+        output format : 0 for outside word, and incrementing by 1 for each succesive word.
+
+        '''
+        #batch_BIO = torch.argmax(p_bio)
+        map_frame_to_word = []
+        for bio in decoded_bio:
+            loc_map = []
+            index = 0
+            inside = False
+            for b in bio:
+                #outside
+                if b == 0:
+                    loc_map.append(0)
+                    inside = False
+                #begin
+                elif b == 1:
+                    index+=1
+                    loc_map.append(index)
+                    inside = True
+                #Inside (and begin is before)
+                elif b == 2 and inside:
+                    loc_map.append(index)
+                #Inside (and begin is not before) Should never happen with decoded
+                else:
+                    loc_map.append(0)
+            map_frame_to_word.append(torch.tensor(loc_map))
+        return torch.nn.utils.rnn.pad_sequence(map_frame_to_word, batch_first=True)
+
+    def compute_bio(self, p_bio, length, start_words, end_words):
+        '''
+            Compute the supervision based on the wav2vec2 stride and the timestamp
+
+        '''
+        #NEED TO DECIDE WHAT TO DO WHEN GOLD SEGMENT ARE SHORTER THAN A FRAME 
+        # REMOVED THE SAMPLE FROM THE DATA 
+
+        supervision = []
+        #print(f"start word : {start_words}")
+        for start, end, b, l in zip(start_words, end_words, p_bio, length):
+            #put (outside) in every place
+            sup = torch.ones((p_bio.shape[1]), device = self.device, dtype = torch.long) * BIO_dict["outside"]
+            for s_w , e_w in zip(start, end):
+                #print(s_w)
+                #0.02 is the wav2vec2 stride ("about 20ms") but the receptive fields is 25ms.
+                #IDK why with 0.02 sometimes the start index is OOB
+                try:
+                    start_idx = int(s_w / 0.025)
+                    end_idx = int(e_w / 0.025)
+                    sup[start_idx] = BIO_dict["begin"]
+                    sup[start_idx+1:end_idx] = BIO_dict["inside"]
+                    #sup[l-1] = BIO_dict["<end>"]
+                    #use start as padding
+                    #sup[l:] = BIO_dict["<start>"]
+                except IndexError as e:
+                    print("INDEX ERROR")
+                    print(start_words)
+                    print(s_w)
+                    print(start_idx)
+                    print(s_w/0.02)
+                    print(sup.shape)
+                    raise e
+            supervision.append(sup)
+        return torch.stack(supervision)
+
 
     def _create_inputDep(self, x, mapFrameToWord):
         """
@@ -185,13 +284,15 @@ class ASR(sb.core.Brain):
         )
         return batch, torch.Tensor(seq_len)
 
+
     def compute_objectives_syntax(
         self, predicted_words, p_depLabel, p_govLabel, p_posLabel, seq_len, batch
     ):
         ids = batch.id
-        dep2Label_dep = batch.depDep2Label[0]  # get tensor from padded data class
-        dep2Label_gov = batch.govDep2label[0]
-        gold_POS = batch.pos_tensor[0]
+        batch_size = len(ids)
+        gold_dep = batch.dep_tokens[0]  # get tensor from padded data class
+        gold_head = batch.head[0]
+        gold_pos = batch.pos_tokens[0]
         tokens, tokens_lens = batch.tokens
         target_words = undo_padding(tokens, tokens_lens)
         target_words = self.tokenizer(target_words, task="decode_from_list")
@@ -210,55 +311,88 @@ class ASR(sb.core.Brain):
             # format  [('=', 0, 0), ('D', 1, None), ('=', 2, 1), ('S', 3, 2), ('I', None, 3)]
             # ie : (type of token, gold_position, system_position)
             wer_alig = [a["alignment"] for a in wer_details_alig]
+            # [1:] because of root inserted in the begining, do not take into account for alignment_oracle.
+            '''
             (
-                dep2Label_gov,
-                dep2Label_dep,
-                gold_POS,
+                gold_head,
+                gold_dep,
+                gold_pos,
             ) = self.hparams.oracle.find_best_tree_from_alignment(
                 wer_alig,
-                dep2Label_gov.tolist(),
-                dep2Label_dep.tolist(),
-                gold_POS.tolist(),
+                [x[1:] for x in gold_head.tolist()],
+                [x[1:] for x in gold_dep.tolist()],
+                [x[1:] for x in gold_pos.tolist()],
             )
-            dep2Label_gov = pad_sequence(dep2Label_gov, batch_first=True).to(
+            gold_dep = pad_sequence(gold_dep, batch_first=True).to(self.device)
+            gold_head = pad_sequence(gold_head, batch_first=True).to(self.device)
+            gold_pos = pad_sequence(gold_pos, batch_first=True).to(self.device)
+            
+
+            root_dep = torch.full(
+                (batch_size, 1), fill_value=dep_label_dict.get("root")
+            ).to(self.device)
+            gold_dep = torch.cat((root_dep, gold_dep), dim=1)
+            root_head = torch.full((batch_size, 1), fill_value=0).to(self.device)
+            gold_head = torch.cat((root_head, gold_head), dim=1)
+            root_pos = torch.full((batch_size, 1), fill_value=pos_dict.get("ROOT")).to(
                 self.device
             )
-            dep2Label_dep = pad_sequence(dep2Label_dep, batch_first=True).to(
-                self.device
-            )
-            gold_POS = pad_sequence(gold_POS, batch_first=True).to(self.device)
+            gold_pos = torch.cat((root_pos, gold_pos), dim=1)
+            '''
+            # add value for root
+
             try:
-                loss_depLabel = self.hparams.depLabel_cost(
-                    p_depLabel,
-                    dep2Label_dep,
-                    length=seq_len,
-                    allowed_len_diff=allowed,
+                num_padded_deps = gold_head.shape[1]
+                num_deprels = p_depLabel.shape[-1]
+                # Need to add one to sequence len because of root.
+
+                loss_pos = self.hparams.posLabel_cost(
+                    p_posLabel, gold_pos, length=seq_len, allowed_len_diff=allowed
                 )
-                loss_govLabel = self.hparams.govLabel_cost(
+                loss_arc = self.hparams.govLabel_cost(
                     p_govLabel,
-                    dep2Label_gov,
+                    gold_head,
                     length=seq_len,
                     allowed_len_diff=allowed,
                 )
-                loss_POS = self.hparams.posLabel_cost(
-                    p_posLabel, gold_POS, length=seq_len, allowed_len_diff=allowed
+
+                # label loss, must not take into account the non existing arc
+                # we replace the value of padding with 0
+                positive_heads = gold_head.masked_fill(
+                    gold_head.eq(self.hparams.LABEL_PADDING), 0
+                )
+                heads_selection = positive_heads.view(batch_size, num_padded_deps, 1, 1)
+                # [batch, n_dependents, 1, n_labels]
+                heads_selection = heads_selection.expand(
+                    batch_size, num_padded_deps, 1, num_deprels
+                )
+                # [batch, n_dependents, 1, n_labels]
+                # squeeze dim is given to preserve the batch size in case of end of epoch
+                # where batc might be equal to 1
+                predicted_labels_scores = torch.gather(
+                    p_depLabel, -2, heads_selection
+                ).squeeze(dim=2)
+                loss_deprel = self.hparams.depLabel_cost(
+                    predicted_labels_scores,
+                    gold_dep,
+                    length=seq_len,
+                    allowed_len_diff=allowed,
                 )
             except (ValueError, RuntimeError) as e:
-                print(dep2Label_gov)
-                print(dep2Label_dep)
-                print(gold_POS)
-                self.print_tree(dep2Label_gov, dep2Label_dep, gold_POS, predicted_words)
+                print(gold_head)
+                print(gold_dep)
+                print(gold_pos)
                 raise ValueError() from e
         except ValueError as e:
-            print(
-                f" True shape : {dep2Label_dep.shape}, pred shape: {p_depLabel.shape}"
-            )
+            print(f" True shape : {gold_dep.shape}, pred shape: {p_depLabel.shape}")
             raise ValueError() from e
         return {
-            "loss_gov": loss_govLabel,
-            "loss_dep": loss_depLabel,
-            "loss_pos": loss_POS,
+            "loss_gov": loss_arc,
+            "loss_dep": loss_deprel,
+            "loss_pos": loss_pos,
         }
+
+
 
     def compute_objectives(self, predictions, batch, stage):
         """
@@ -288,9 +422,9 @@ class ASR(sb.core.Brain):
                             predicted_words[i].append("EMPTY_ASR")
             loss_dict = self.compute_objectives_syntax(
                 predicted_words,
-                predictions["p_depLabel"],
-                predictions["p_govLabel"],
-                predictions["p_posLabel"],
+                predictions["dep_scores"],
+                predictions["arc_scores"],
+                predictions["pos_scores"],
                 predictions["seq_len"],
                 batch,
             )
@@ -329,42 +463,30 @@ class ASR(sb.core.Brain):
             )
             self.stage_wer_details.extend(wer_details)
             if self.is_training_syntax:
-                self.hparams.evaluator.decode(
-                    [
-                        predictions["p_govLabel"],
-                        predictions["p_depLabel"],
-                        predictions["p_posLabel"],
-                    ],
-                    predicted_words,
-                    ids,
-                )
+                for a_scores, d_scores, p_scores, seq_len, form, sent_id in zip(
+                    predictions["arc_scores"],
+                    predictions["dep_scores"],
+                    predictions["pos_scores"],
+                    predictions["seq_len"],
+                    #predicted_words,
+                    [w.split(" ") for w in batch.wrd],
+                    batch.id,
+                ):
+                    tree = score_to_tree(
+                        a_scores[:seq_len, :seq_len],
+                        d_scores[:seq_len, :seq_len, :],
+                        p_scores[:seq_len, :],
+                        sent_id=sent_id,
+                        greedy=False,
+                        root_in_form=False,
+                        form=form,
+                        reverse_pos_dict=reverse_pos_dict,
+                        reverse_dep_label_dict=reverse_dep_label_dict,
+                    )
+                    self.result_trees.append(tree)
         return loss
 
-    def print_tree(self, govs, deps, poss, pred_words):
-        """
-        This a debug function used to print the tree from the different tensor
-        Parameters
-        ----------
-        govs : The tensor of governor/head
-        deps : The tensor containing the syntactic funtions label
-        poss : The tensor containing the Part of Speech label
-        pred_words : The tensor containing the predicted words
-
-        Returns
-        -------
-
-        """
-        for gov_tensor, dep_tensor, pos_tensor, pred_word_tensor in zip(
-            govs, deps, poss, pred_words
-        ):
-            print("--------------------------------------------------")
-            for gov, dep, pos, pred_word in zip(
-                gov_tensor, dep_tensor, pos_tensor, pred_word_tensor
-            ):
-                print(
-                    f"{pred_word}\t{reverse_label_alphabet[0].get(gov.item())}\t"
-                    + f"{reverse_label_alphabet[1].get(dep.item())}\t{reverse_label_alphabet[2].get(pos.item())}"
-                )
+    # --------------------------------------------------------------------------------------#
 
     def init_optimizers(self):
         "Initializes the wav2vec2 optimizer and model optimizer"
@@ -690,9 +812,6 @@ class ASR(sb.core.Brain):
                     goldPath_CoNLLU = self.hparams.test_gold_conllu
                     alig_file = self.hparams.alig_path + "_test"
                     order = self.test_order
-                print(self.hparams.evaluator.decoded_sentences)
-                print(order)
-                self.hparams.evaluator.writeToCoNLLU(st, order)
 
                 # write accumulated wer_details.
                 self.stage_wer_details = natsorted(
@@ -700,10 +819,19 @@ class ASR(sb.core.Brain):
                 )
                 with open(alig_file, "w", encoding="utf-8") as f_out:
                     print_alignments(self.stage_wer_details, file=f_out)
+                self._convert_tree_to_conllu()
+                with open(st, "w", encoding="utf-8") as f_v:
+                    write_token_dict_conllu(self.data_valid, f_v, order=order)
+                self.result_trees = []
+                self.data_valid = {}
 
-                metrics_dict = self.hparams.evaluator.evaluateCoNLLU(
-                    goldPath_CoNLLU, st, alig_file
-                )
+                d = types.SimpleNamespace()
+                d.system_file = st
+                d.gold_file = goldPath_CoNLLU
+                d.alignment_file = alig_file
+                d.gold_segmentation = True
+                metrics_dict = self.hparams.evaluator.evaluate_wrapper(d)
+
                 stage_stats["LAS"] = metrics_dict["LAS"].f1 * 100
                 stage_stats["UAS"] = metrics_dict["UAS"].f1 * 100
                 stage_stats["SER"] = metrics_dict["seg_error_rate"].precision * 100
@@ -767,6 +895,7 @@ class ASR(sb.core.Brain):
             with open(self.hparams.wer_file, "w") as w:
                 self.wer_metric.write_stats(w)
 
+    # to debug
     def transcribe_dataset(
         self,
         dataset,  # Must be obtained from the dataio_function
@@ -826,13 +955,9 @@ class ASR(sb.core.Brain):
                 )
                 WER.extend(wer_details)
                 self.wer_metric.append(ids, predicted_words, target_words)
-                self.hparams.evaluator.decode(
-                    [p_govLabel, p_depLabel, p_posLabel], predicted_words, ids
-                )
             st = self.hparams.test_output_conllu
 
             order = self.test_order
-            self.hparams.evaluator.writeToCoNLLU(st, order)
 
             WER = natsorted(WER, key=itemgetter(*["key"]))
             with open(self.hparams.alig_path + "_test", "w", encoding="utf-8") as f_out:
@@ -840,6 +965,23 @@ class ASR(sb.core.Brain):
 
             wer_metric = self.wer_metric.summarize()
             print(f"WER : {wer_metric}")
+
+    def _convert_tree_to_conllu(self):
+        for tree in self.result_trees:
+            s_id = tree["sent_id"]
+            self.data_valid[s_id] = {"sent_id": s_id, "sentence": []}
+            for i, (edge, pos, f) in enumerate(
+                zip(tree["edges"], tree["pos_tags"], tree["form"]), start=1
+            ):
+                self.data_valid[s_id]["sentence"].append(
+                    {
+                        "ID": i,
+                        "FORM": f,
+                        "UPOS": pos,
+                        "HEAD": edge[0],
+                        "DEPREL": edge[1],
+                    }
+                )
 
 
 # Define custom data procedure
@@ -926,7 +1068,7 @@ def dataio_prepare(hparams, tokenizer):
     # 3. Define text pipeline:
     @sb.utils.data_pipeline.takes("wrd")
     @sb.utils.data_pipeline.provides(
-        "tokens_list", "tokens_bos", "tokens_eos", "tokens"
+        "wrd", "tokens_list", "tokens_bos", "tokens_eos", "tokens"
     )
     def text_pipeline(wrd):
         """
@@ -943,6 +1085,7 @@ def dataio_prepare(hparams, tokenizer):
         -------
 
         """
+        yield wrd
         tokens_list = tokenizer.sp.encode_as_ids(wrd)
         yield tokens_list
         tokens_bos = torch.LongTensor([hparams["bos_index"]] + (tokens_list))
@@ -956,122 +1099,65 @@ def dataio_prepare(hparams, tokenizer):
 
     # 4. Define dependency pipeline
 
-    @sb.utils.data_pipeline.takes("wrd", "pos", "gov", "dep")
+    @sb.utils.data_pipeline.takes("pos", "gov", "dep")
+    @sb.utils.data_pipeline.provides("pos_tokens", "head", "dep_tokens")
+    def syntax_pipeline(pos, head, dep):
+        poss = pos.split(" ")
+        poss.insert(0, "ROOT")
+        pos_tokens = torch.tensor([pos_dict.get(p) for p in poss])
+        yield pos_tokens
+        he = head.split(" ")
+        head = [int(h) for h in he]
+        head.insert(0, 0)
+        yield torch.tensor(head)
+        de = dep.split(" ")
+        de.insert(0, "ROOT")
+        #print(de)
+        dep = [dep_label_dict.get(d.lower()) for d in de]
+        dep_token = torch.tensor(dep)
+        yield dep_token
+
+    sb.dataio.dataset.add_dynamic_item(datasets, syntax_pipeline)
+
+
+    # 5. Define BIO pipeline
+
+    @sb.utils.data_pipeline.takes("start_word", "end_word")
     @sb.utils.data_pipeline.provides(
-        "wrd", "pos_tensor", "govDep2label", "depDep2Label"
+        "start_words", "end_words"
     )
-    def dep2label_pipeline(wrd, poss, gov, dep):
-        """
-        The dependecy parsing pipeline.
-        Parameters
-        ----------
-        wrd : the raw word
-        poss: the part of speech in the csv file
-        gov : the gov/head label in the csv file
-        dep : the syntactic function in the csv file
+    def BIO_pipeline(start_word, end_word):
+        # we remove the first value (begin) to each value
+        # since the timestamp is for the whole file in Orfeo and not the segment
+        # Note, small bias since the first frame will always be a B followed by a few I
+        start_word = start_word.split(" ")
+        begin_time = float(start_word[0])
+        start_words =  torch.tensor([float(x) - begin_time for x in start_word])
+        yield start_words
+        end_words =  torch.tensor([float(x) - begin_time for x in end_word.split(" ")])
+        yield end_words
 
-        Returns
-        wrd: the raw word
-        pos_list : the tensor of labeled part of speech
-        govDep2label: the relative encoding of head/gov labeled
-        depDep2Label: the labeled syntactic function
-        -------
+    sb.dataio.dataset.add_dynamic_item(datasets, BIO_pipeline)
 
-        """
-        yield wrd
-        # 3 task is POS tagging
-        try:
-            pos_list = torch.LongTensor(
-                [label_alphabet[2].get(p) for p in poss.split(" ")]
-            )
-        except TypeError:
-            print(wrd)
-            print(poss)
-            print([label_alphabet[2].get(p) for p in poss.split(" ")])
-        yield pos_list
-        fullLabel = encoding.encodeFromList(
-            [w for w in wrd.split(" ")],
-            [p for p in poss.split(" ")],
-            [g for g in gov.split(" ")],
-            [d for d in dep.split(" ")],
-        )
-        # first task is gov pos and relative position
-        try:
-            govDep2label = torch.LongTensor(
-                [
-                    label_alphabet[0].get(fl.split("\t")[-1].split("{}")[0])
-                    for fl in fullLabel
-                ]
-            )
-            yield govDep2label
-        except TypeError as e:
-            print(wrd)
-            print([fl.split("\t")[-1].split("{}")[0] for fl in fullLabel])
-            print(
-                [
-                    label_alphabet[0].get(fl.split("\t")[-1].split("{}")[0])
-                    for fl in fullLabel
-                ]
-            )
-            raise TypeError() from e
-        # second task is dependency type
-        depDep2Label = torch.LongTensor(
-            [label_alphabet[1].get(fl.split("{}")[1]) for fl in fullLabel]
-        )
-        yield depDep2Label
 
-    sb.dataio.dataset.add_dynamic_item(datasets, dep2label_pipeline)
-
-    # 4. Set output:
+    # 6. Set output:
     sb.dataio.dataset.set_output_keys(
         datasets,
         [
             "id",
             "sig",
+            "wrd",
             "tokens_bos",
             "tokens_eos",
             "tokens",
-            "wrd",
-            "pos_tensor",
-            "govDep2label",
-            "depDep2Label",
+            "pos_tokens",
+            "head",
+            "dep_tokens",
+            "start_words",
+            "end_words"
         ],
     )
     return train_data, valid_data, test_data
-
-
-def build_label_alphabet(path_encoded_train):
-    label_gov = dict()
-    label_dep = dict()
-    label_pos = dict()
-    with open(path_encoded_train, "r", encoding="utf-8") as inputFile:
-        for line in inputFile:
-            field = line.split("\t")
-            if len(field) > 1:
-                fullLabel = field[-1]
-                labelSplit = fullLabel.split("{}")
-                govLabel = labelSplit[0]
-                if govLabel not in label_gov:
-                    label_gov[govLabel] = len(label_gov)
-                depLabel = labelSplit[-1].replace("\n", "")
-                if depLabel not in label_dep:
-                    label_dep[depLabel] = len(label_dep)
-                pos = field[1]
-                if pos not in label_pos:
-                    label_pos[pos] = len(label_pos)
-    for pos_key in label_pos:
-        for i in range(1, 20):
-            key = f"{i}@{pos_key}"
-            if "+" + key not in label_gov.keys():
-                label_gov["+" + key] = len(label_gov)
-            if "-" + key not in label_gov.keys():
-                label_gov["-" + key] = len(label_gov)
-    label_gov["-1@INSERTION"] = len(label_gov)
-    label_gov["-1@DELETION"] = len(label_gov)
-    label_dep["INSERTION"] = len(label_dep)
-    label_dep["DELETION"] = len(label_dep)
-    label_pos["INSERTION"] = len(label_pos)
-    return [label_gov, label_dep, label_pos]
 
 
 def get_id_from_CoNLLfile(path):
@@ -1088,19 +1174,62 @@ def get_id_from_CoNLLfile(path):
     return sent_id
 
 
-def build_reverse_alphabet(alphabet):
-    reverse = []
-    for alpha in alphabet:
-        reverse.append({item: key for (key, item) in alpha.items()})
-    return reverse
+dep_label_dict = {
+    "periph": 0,
+    "subj": 1,
+    "root": 2,
+    "dep": 3,
+    "dm": 4,
+    "spe": 5,
+    "mark": 6,
+    "para": 7,
+    "aux": 8,
+    "disflink": 9,
+    "morph": 10,
+    "parenth": 11,
+    "aff": 12,
+    "__joker__": 13,
+    "DELETION": 14,
+    "INSERTION": 15,
+}
+reverse_dep_label_dict = {v: k for k, v in dep_label_dict.items()}
 
+
+pos_dict = {
+    "PADDING": 0,
+    "ADV": 1,
+    "CLS": 2,
+    "VRB": 3,
+    "PRE": 4,
+    "INT": 5,
+    "DET": 6,
+    "NOM": 7,
+    "COO": 8,
+    "CLI": 9,
+    "ADJ": 10,
+    "VNF": 11,
+    "CSU": 12,
+    "ADN": 13,
+    "PRQ": 14,
+    "VPP": 15,
+    "PRO": 16,
+    "NUM": 17,
+    "X": 18,
+    "CLN": 19,
+    "VPR": 20,
+    "ROOT": 21,
+    "DELETION": 22,
+    "INSERTION": 23,
+}
+
+reverse_pos_dict = {v: k for k, v in pos_dict.items()}
+
+label_alphabet = [dep_label_dict, pos_dict]
+reverse_label_alphabet = [reverse_dep_label_dict, reverse_pos_dict]
 
 if __name__ == "__main__":
     wandb.init(group="Audio")
     print(f"wandb run name : {wandb.run.name}")
-    path_encoded_train = "all.seq"  # For alphabet generation
-    label_alphabet = build_label_alphabet(path_encoded_train)
-    reverse_label_alphabet = build_reverse_alphabet(label_alphabet)
     # Load hyperparameters file with command-line overrides
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
     with open(hparams_file) as fin:
@@ -1108,6 +1237,14 @@ if __name__ == "__main__":
 
     goldPath_CoNLLU_dev = hparams["dev_gold_conllu"]
     goldPath_CoNLLU_test = hparams["test_gold_conllu"]
+
+    BIO_dict = {"<start>":0,
+            "begin": 1,
+            "inside": 2,
+            "outside": 3,
+            "<end>": 4}
+
+
 
     # If distributed_launch=True then
     # create ddp_group with the right communication protocol
@@ -1162,9 +1299,10 @@ if __name__ == "__main__":
     # Adding objects to trainer.
     # doing this to avoid overwriting the class constructor
     asr_brain.tokenizer = tokenizer
+    asr_brain.result_trees = []
+    asr_brain.data_valid = {}
     asr_brain.hparams.oracle.set_alphabet(label_alphabet, reverse_label_alphabet)
     asr_brain.is_training_syntax = False
-    asr_brain.hparams.evaluator.set_alphabet(label_alphabet)
     # Diverse information on the data such as PATH and order of sentences.
     asr_brain.dev_order = get_id_from_CoNLLfile(hparams["dev_gold_conllu"])
     asr_brain.test_order = get_id_from_CoNLLfile(hparams["test_gold_conllu"])
@@ -1201,7 +1339,7 @@ if __name__ == "__main__":
     )
 
     # transcribe
-    '''
+    """
     run_on_main(
         asr_brain.transcribe_dataset,
         kwargs={
@@ -1210,9 +1348,4 @@ if __name__ == "__main__":
             "loader_kwargs": hparams["test_dataloader_options"],
         },
     )
-    asr_brain.transcribe_dataset(
-        dataset=test_data,  # Must be obtained from the dataio_function
-        min_key="WER",
-        loader_kwargs=hparams["test_dataloader_options"],
-    )
-    '''
+    """

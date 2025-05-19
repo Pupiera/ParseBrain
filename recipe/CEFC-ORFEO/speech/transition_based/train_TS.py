@@ -1,10 +1,12 @@
-#!/usr/bin/env python3
+"""
+Recipe for transition based parsing on the CEFC-ORFEO dataset.
+authors : Adrien PUPIER
+"""
 import sys
 import torch
 from tqdm import tqdm
 import time
 import types
-from typing import NamedTuple
 
 
 import speechbrain as sb
@@ -23,9 +25,16 @@ from parsebrain.speechbrain_custom.decoders.ctc import ctc_greedy_decode
 from torch.nn.utils.rnn import pad_sequence
 import logging
 
-# ---------------------Scoring import----------------------#
-from parsebrain.processing.dependency_parsing.graph_based import score_to_tree
 
+# ------------------------------------- Parsebrain ---------------------------------------#
+from parsebrain.dataio.pred_to_file.pred_to_conllu import write_token_dict_conllu
+from parsebrain.speechbrain_custom.decoders.ctc import ctc_greedy_decode
+
+from parsebrain.processing.dependency_parsing.transition_based.configuration import (
+    Configuration,
+    GoldConfiguration,
+    Word,
+)
 
 # --------------------------------------- Alignment import --------------------------------#
 from speechbrain.utils.edit_distance import wer_details_for_batch
@@ -36,103 +45,235 @@ from operator import itemgetter
 # ----------------------------------------- Import profiling -------------------------------------------#
 import wandb
 
-"""Recipe for training a sequence-to-sequence ASR system with Orfeo.
-The system employs a wav2vec2 encoder and a ASRDep2Label decoder.
-Decoding is performed with greedy decoding (will be extended to beam search with language model).
-
-To run this recipe, do the following:
-> python train_with_wav2vec2.py hparams/train_with_wav2vec2.yaml
-
-With the default hyperparameters, the system employs a pretrained wav2vec2 encoder.
-The wav2vec2 model is pretrained following the model given in the hprams file.
-It may be dependent on the language.
-
-Authors
- * Titouan Parcollet 2021 for ASR template
- * PUPIER Adrien 2022 for adapting template to dependency parsing.
-"""
 
 INTRA_EPOCH_CKPT_FLAG = "brain_intra_epoch_ckpt"
 
-# -----------------------------------------------------------BRAIN ASR---------------------------------------------#
-# Define training procedure
-class ASR(sb.core.Brain):
-    """
-    This is a subclass of Brain in speechbrain.
-    Contains the definition/ behaviour of the model (forward + loss computation)
-    """
 
+# @export
+# @profile_optimiser
+class Parser(sb.core.Brain):
     def compute_forward(self, batch, stage):
-        """
-        This function compute the forward pass of batch.
-        It uses the Dep2Label paradigm for dependency parsing
-
-        Parameters
-        ----------
-        batch : the corresponding row of the CSV file. ( contains the value defined in the pipeline)
-        ["id", "sig", "tokens_bos", "tokens_eos", "tokens", "wrd", "pos_tensor", "govDep2label", "depDep2Label"]
-        stage : TRAIN, DEV, TEST. Allow for specific computation based on the stage.
-
-        Returns
-        p_ctc : The probability of a given character in this frame [batch, time, char_alphabet]
-        wav_lens : the lentgh of the wav file
-        p_depLabel : the probablity of the syntactic functions [batch, max(seq_len), dep_alphabet]
-        p_govLabel : the probablity of the head [batch, max(seq_len), gov_alphabet]
-        p_posLabel : the probablity of the part of speech : [batch, max(seq_len), POS_alphabet]
-        seq_len : the length of each dependency parsing element of the batch (audio word embedding lentgh)
-        -------
-
-        """
+        #1. Do speech recognition
         batch = batch.to(self.device)
         wavs, wav_lens = batch.sig
-        tokens_bos, _ = batch.tokens_bos
-        wavs, wav_lens = wavs.to(self.device), wav_lens.to(self.device)
-        if stage == sb.Stage.TRAIN:
-            if hasattr(self.hparams, "augmentation"):
-                wavs = self.hparams.augmentation(wavs, wav_lens)
-
-        # Forward pass ASR
+        wavs, wavs_lens = wavs.to(self.device), wav_lens.to(self.device)
         batch_size = wavs.shape[0]
+        #check last batch for debug
+        #if batch_size < 8:
+        #    import pudb; pudb.set_trace()
+
         feats = self.modules.wav2vec2(wavs)
         x = self.modules.enc(feats)  # [batch,time,1024]
         logits = self.modules.ctc_lin(x)  # [batch,time,76]
         # [batch,time,76] (76 in output neurons corresponding to BPE size)
         p_ctc = self.hparams.log_softmax(logits)
         # Forward pass dependency parsing
+        length = torch.tensor([int(wav_len * x.shape[1]) for wav_len in wav_lens])
         result = {"p_ctc": p_ctc, "wav_lens": wav_lens}
+
         if self.is_training_syntax:
-            sequence, mapFrameToWord = ctc_greedy_decode(
+            #2. Computing word level representation
+            sequence, _ = ctc_greedy_decode(
                 p_ctc, wav_lens, blank_id=self.hparams.blank_index
             )
-            input_dep, seq_len = self._create_inputDep(x, mapFrameToWord)
-            input_dep = input_dep.to(self.device)
-            # Add a dummy root embedding. Important for graph based computation.
-            embedding_root = self.modules.embedding_root(
-                torch.zeros((batch_size, 1)).to(self.device)
-            ).to(self.device)
-            input_dep = torch.cat((embedding_root, input_dep), dim=1)
-            # Need to add one to the seq len since we added the dummy root.
+            #BIO from gold TS
+            start_words = batch.start_words.data
+            end_words = batch.end_words.data
+            bio = self.compute_bio(p_ctc, length, start_words, end_words)
+            map_frame_to_word = self.colapse_bio(bio)
+            predicted_timestamp = self.compute_timestamp_from_BIO(bio)
 
-            x = torch.ones((batch_size)).to(self.device)
-            seq_len = torch.add(seq_len.to(self.device), x).to(
-                dtype=torch.long, device=self.device
+            features, seq_len = self._create_inputDep(x, map_frame_to_word)
+            seq_len = seq_len.to(self.device)
+            features = features.to(self.device)
+            features, _ = self.modules.encoder_rnn(features)
+
+            #3. Use whatever parser
+            config = [] 
+            gold_config = []
+            static = (
+                self.hparams.number_of_epochs_static >= self.hparams.epoch_counter.current
             )
+            root_value = self.hparams.special_embedding(
+                torch.zeros((batch_size, 1)).to(self.device)
+            )
+            #WE COMPUTE THE GOLD DERIVATION WHILE TRAINING
+            # FOR THE LOSS, SO ADAPTED HEAD, DEP AND POS ARE NEEDED HERE
 
-            batch_len = input_dep.shape[0]
-            # init hidden to zeros for each sentence
-            features, _ = self.modules.rnn(input_dep)
-            pos_scores, arc_scores, dep_scores = self.modules.graph_parser(features)
-            arc_scores = self.hparams.log_softmax(arc_scores)
-            dep_scores = self.hparams.log_softmax(dep_scores)
+            gold_dep = batch.dep_tokens[0]  # get tensor from padded data class
+            gold_head = batch.head[0]
+            gold_pos = batch.pos_tokens[0]
 
-            result_parsing = {
-                "pos_scores": pos_scores,
-                "dep_scores": dep_scores,
-                "arc_scores": arc_scores,
-                "seq_len": seq_len,
-            }
-            result = {**result, **result_parsing}
+            #tokens, tokens_lens = batch.tokens
+            #target_words = undo_padding(tokens, tokens_lens)
+            #target_words = self.tokenizer(target_words, task="decode_from_list")
+            #just take the gold word here, since the segmentation is gold anyway
+            predicted_words = batch.words
+            '''
+            predicted_words = self.tokenizer(sequence, task="decode_from_list")
+            for i, sent in enumerate(predicted_words):
+                for w in sent:
+                    if w == "":
+                        predicted_words[i] = [w for w in sent if w != ""]
+                        if len(predicted_words[i]) == 0:
+                            predicted_words[i].append("EMPTY_ASR")
+            NOT NEEDED when we have the BIO
+            wer_details_alig = wer_details_for_batch(
+                ids=batch.id,
+                refs=target_words,
+                hyps=predicted_words,
+                compute_alignments=True,
+            )
+            # format  [('=', 0, 0), ('D', 1, None), ('=', 2, 1), ('S', 3, 2), ('I', None, 3)]
+            # ie : (type of token, gold_position, system_position)
+            wer_alig = [a["alignment"] for a in wer_details_alig]
+            #import pudb; pudb.set_trace()
+
+
+            (updated_head, 
+             updated_dep,
+             updated_pos
+            ) = self.hparams.oracle.find_best_tree_from_alignment(
+                wer_alig,
+                [x for x in gold_head.tolist()],
+                [x for x in gold_dep.tolist()],
+                [x for x in gold_pos.tolist()],
+             )
+            updated_head = pad_sequence(updated_head, batch_first=True).to(self.device)
+            updated_dep = pad_sequence(updated_dep, batch_first=True).to(self.device)
+            updated_pos = pad_sequence(updated_pos, batch_first=True).to(self.device)
+            '''
+            #import pudb; pudb.set_trace()
+            updated_head = gold_head
+            updated_dep = gold_dep
+            result["updated_pos"] = gold_pos
+            result["seq"] = seq_len
+
+            if stage != sb.Stage.TEST:
+                for id, wrds, feat, head, dep, root in zip(
+                    batch.id,
+                    predicted_words,
+                    features,
+                    updated_head,
+                    updated_dep,
+                    root_value,
+                ):
+                    config.append(
+                        Configuration(
+                            feat, self.create_words_list(wrds.split(" ")), root_embedding=root
+                        
+                    ))
+                    gold_config.append(GoldConfiguration(head, dep, id))
+            else:
+                for wrds, feat, root in zip(
+                    batch.words, features, root_value
+                ):
+                    config.append(
+                        Configuration(
+                            feat, self.create_words_list(wrds.split(" ")), root_embedding=root
+                        )
+                    )
+            pos_log_prob = self.hparams.neural_network_POS(features)
+            #import pudb; pudb.set_trace()
+            if sb.Stage.TRAIN == stage:
+                parsing_dict = self.hparams.parser.parse(
+                    config, stage, gold_config, static=static
+                )
+            else:
+                #gold config for valid to compute stat but none for test
+                parsing_dict = self.hparams.parser.parse(config, stage, gold_config)
+            parsing_dict["pos_log_prob"] = pos_log_prob
+            parsing_dict["seq_len"] = seq_len
+            result = {**result, **parsing_dict}
         return result
+    
+    def compute_timestamp_from_BIO(self, tensor):
+        '''
+        return a list of dict where the key correpsond to the postion of the word in the sequence
+        '''
+        all_indice = []
+        frame_duration = 0.025
+        dim=0
+        for i in range(tensor.size(dim)):
+            unique_values, unique_indices = torch.unique(tensor[i], return_inverse=True)
+            indices_dict = {}
+            for i, value in enumerate(unique_values):
+                indices = (unique_indices == i).nonzero().view(-1)
+                indices_dict[value.item()] = {'first': indices[0].item() * frame_duration, 'last': indices[-1].item() * frame_duration}
+            all_indice.append(indices_dict)
+
+        return all_indice
+
+
+    def colapse_bio(self, decoded_bio):
+        '''
+        There may be some optimized way to compute this (like taking the most likely path
+        while keeping the constraint of each word begining by B).
+        output format : 0 for outside word, and incrementing by 1 for each succesive word.
+
+        '''
+        #batch_BIO = torch.argmax(p_bio)
+        map_frame_to_word = []
+        for bio in decoded_bio:
+            loc_map = []
+            index = 0
+            inside = False
+            for b in bio:
+                #outside
+                if b == 0:
+                    loc_map.append(0)
+                    inside = False
+                #begin
+                elif b == 1:
+                    index+=1
+                    loc_map.append(index)
+                    inside = True
+                #Inside (and begin is before)
+                elif b == 2 and inside:
+                    loc_map.append(index)
+                #Inside (and begin is not before) Should never happen with decoded
+                else:
+                    loc_map.append(0)
+            map_frame_to_word.append(torch.tensor(loc_map))
+        return torch.nn.utils.rnn.pad_sequence(map_frame_to_word, batch_first=True)
+
+    def compute_bio(self, p_bio, length, start_words, end_words):
+        '''
+            Compute the supervision based on the wav2vec2 stride and the timestamp
+
+        '''
+        #NEED TO DECIDE WHAT TO DO WHEN GOLD SEGMENT ARE SHORTER THAN A FRAME
+        # REMOVED THE SAMPLE FROM THE DATA
+
+        supervision = []
+        #print(f"start word : {start_words}")
+        for start, end, b, l in zip(start_words, end_words, p_bio, length):
+            #put (outside) in every place
+            sup = torch.ones((p_bio.shape[1]), device = self.device, dtype = torch.long) * BIO_dict["outside"]
+            for s_w , e_w in zip(start, end):
+                #print(s_w)
+                #0.02 is the wav2vec2 stride ("about 20ms") but the receptive fields is 25ms.
+                #IDK why with 0.02 sometimes the start index is OOB
+                try:
+                    start_idx = int(s_w / 0.025)
+                    end_idx = int(e_w / 0.025)
+                    sup[start_idx] = BIO_dict["begin"]
+                    sup[start_idx+1:end_idx] = BIO_dict["inside"]
+                    #sup[l-1] = BIO_dict["<end>"]
+                    #use start as padding
+                    #sup[l:] = BIO_dict["<start>"]
+                except IndexError as e:
+                    print("INDEX ERROR")
+                    print(start_words)
+                    print(s_w)
+                    print(start_idx)
+                    print(s_w/0.02)
+                    print(sup.shape)
+                    raise e
+            supervision.append(sup)
+        return torch.stack(supervision)
+
+    
 
     def _create_inputDep(self, x, mapFrameToWord):
         """
@@ -188,125 +329,12 @@ class ASR(sb.core.Brain):
         )
         return batch, torch.Tensor(seq_len)
 
-    def compute_objectives_syntax(
-        self, predicted_words, p_depLabel, p_govLabel, p_posLabel, seq_len, batch
-    ):
-        ids = batch.id
-        batch_size = len(ids)
-        gold_dep = batch.dep_tokens[0]  # get tensor from padded data class
-        gold_head = batch.head[0]
-        gold_pos = batch.pos_tokens[0]
-        tokens, tokens_lens = batch.tokens
-        target_words = undo_padding(tokens, tokens_lens)
-        target_words = self.tokenizer(target_words, task="decode_from_list")
-        try:
-            # No len mismatch beetwen pred and target. Using speechrbain alignment
-            allowed = 0
-            # and dynamic alignment_oracle based on the segmentation of the ASR predictions
-            # 1 is allowed in case of inerstion of 1 empty string at the end (happen rarely)
-
-            wer_details_alig = wer_details_for_batch(
-                ids=ids,
-                refs=target_words,
-                hyps=predicted_words,
-                compute_alignments=True,
-            )
-            # format  [('=', 0, 0), ('D', 1, None), ('=', 2, 1), ('S', 3, 2), ('I', None, 3)]
-            # ie : (type of token, gold_position, system_position)
-            wer_alig = [a["alignment"] for a in wer_details_alig]
-            # [1:] because of root inserted in the begining, do not take into account for alignment_oracle.
-            (
-                gold_head,
-                gold_dep,
-                gold_pos,
-            ) = self.hparams.oracle.find_best_tree_from_alignment(
-                wer_alig,
-                [x[1:] for x in gold_head.tolist()],
-                [x[1:] for x in gold_dep.tolist()],
-                [x[1:] for x in gold_pos.tolist()],
-            )
-            gold_dep = pad_sequence(gold_dep, batch_first=True).to(self.device)
-            gold_head = pad_sequence(gold_head, batch_first=True).to(self.device)
-            gold_pos = pad_sequence(gold_pos, batch_first=True).to(self.device)
-
-            root_dep = torch.full(
-                (batch_size, 1), fill_value=dep_label_dict.get("ROOT")
-            ).to(self.device)
-            gold_dep = torch.cat((root_dep, gold_dep), dim=1)
-            root_head = torch.full((batch_size, 1), fill_value=0).to(self.device)
-            gold_head = torch.cat((root_head, gold_head), dim=1)
-            root_pos = torch.full((batch_size, 1), fill_value=pos_dict.get("ROOT")).to(
-                self.device
-            )
-            gold_pos = torch.cat((root_pos, gold_pos), dim=1)
-
-            # add value for root
-
-            try:
-                num_padded_deps = gold_head.shape[1]
-                num_deprels = p_depLabel.shape[-1]
-                # Need to add one to sequence len because of root.
-
-                loss_pos = self.hparams.posLabel_cost(
-                    p_posLabel, gold_pos, length=seq_len, allowed_len_diff=allowed
-                )
-                loss_arc = self.hparams.govLabel_cost(
-                    p_govLabel,
-                    gold_head,
-                    length=seq_len,
-                    allowed_len_diff=allowed,
-                )
-
-                # label loss, must not take into account the non existing arc
-                # we replace the value of padding with 0
-                positive_heads = gold_head.masked_fill(
-                    gold_head.eq(self.hparams.LABEL_PADDING), 0
-                )
-                heads_selection = positive_heads.view(batch_size, num_padded_deps, 1, 1)
-                # [batch, n_dependents, 1, n_labels]
-                heads_selection = heads_selection.expand(
-                    batch_size, num_padded_deps, 1, num_deprels
-                )
-                # [batch, n_dependents, 1, n_labels]
-                # squeeze dim is given to preserve the batch size in case of end of epoch
-                # where batc might be equal to 1
-                predicted_labels_scores = torch.gather(
-                    p_depLabel, -2, heads_selection
-                ).squeeze(dim=2)
-                loss_deprel = self.hparams.depLabel_cost(
-                    predicted_labels_scores,
-                    gold_dep,
-                    length=seq_len,
-                    allowed_len_diff=allowed,
-                )
-            except (ValueError, RuntimeError) as e:
-                print(gold_head)
-                print(gold_dep)
-                print(gold_pos)
-                raise ValueError() from e
-        except ValueError as e:
-            print(f" True shape : {gold_dep.shape}, pred shape: {p_depLabel.shape}")
-            raise ValueError() from e
-        return {
-            "loss_gov": loss_arc,
-            "loss_dep": loss_deprel,
-            "loss_pos": loss_pos,
-        }
-
     def compute_objectives(self, predictions, batch, stage):
-        """
-        if self.is_training_syntax:
-            p_ctc, wav_lens, p_depLabel, p_govLabel, p_posLabel, seq_len = predictions
-        else:
-            p_ctc, wav_lens = predictions
-        """
-        ids = batch.id
-
         tokens, tokens_lens = batch.tokens
+        ids = batch.id
         loss = self.hparams.ctc_cost(
             predictions["p_ctc"], tokens, predictions["wav_lens"], tokens_lens
         )
-        # maybe add penalty based on the different of numbers of tokens, only during syntax
         if self.is_training_syntax:
             sequence = sb.decoders.ctc_greedy_decode(
                 predictions["p_ctc"],
@@ -320,25 +348,14 @@ class ASR(sb.core.Brain):
                         predicted_words[i] = [w for w in sent if w != ""]
                         if len(predicted_words[i]) == 0:
                             predicted_words[i].append("EMPTY_ASR")
-            # maybe add penalty based on the different of numbers of tokens, only during syntax
-            # penalty_score = 
 
-            loss_dict = self.compute_objectives_syntax(
-                predicted_words,
-                predictions["dep_scores"],
-                predictions["arc_scores"],
-                predictions["pos_scores"],
-                predictions["seq_len"],
-                batch,
-            )
-            loss = (
-                loss * 0.4
-                + loss_dict["loss_gov"] * 0.2
-                + loss_dict["loss_dep"] * 0.2
-                + loss_dict["loss_pos"] * 0.2
-            )
-        if sb.Stage.TRAIN != stage:
-            # need to get predicted words
+            loss_dict = self.compute_objectives_syntax(predictions, predicted_words, batch, stage)
+            # sum loss to 1 same as in graph based
+            loss_syntax = 0.2 * loss_dict["loss_pos"] + 0.2 * loss_dict["loss_parse"]+ 0.2 * loss_dict["loss_label"]
+            loss = 0.4 * loss + loss_syntax
+
+
+        if stage != sb.Stage.TRAIN:
             if not self.is_training_syntax:
                 sequence = sb.decoders.ctc_greedy_decode(
                     predictions["p_ctc"],
@@ -365,30 +382,194 @@ class ASR(sb.core.Brain):
                 compute_alignments=True,
             )
             self.stage_wer_details.extend(wer_details)
-            if self.is_training_syntax:
-                for a_scores, d_scores, p_scores, seq_len, form, sent_id in zip(
-                    predictions["arc_scores"],
-                    predictions["dep_scores"],
-                    predictions["pos_scores"],
-                    predictions["seq_len"],
-                    predicted_words,
-                    batch.id,
-                ):
-                    tree = score_to_tree(
-                        a_scores[:seq_len, :seq_len],
-                        d_scores[:seq_len, :seq_len, :],
-                        p_scores[:seq_len, :],
-                        sent_id=sent_id,
-                        greedy=False,
-                        root_in_form=False,
-                        form=form,
-                        reverse_pos_dict=reverse_pos_dict,
-                        reverse_dep_label_dict=reverse_dep_label_dict,
-                    )
-                    self.result_trees.append(tree)
+
+
         return loss
 
-    # --------------------------------------------------------------------------------------#
+
+ 
+
+
+    def compute_objectives_syntax(self, parsing_dict, predicted_words, batch, stage):
+        # compute loss : Need to compute predictions (list of gold transitions)
+        seq_len = parsing_dict["seq_len"]
+        seq_len = seq_len/seq_len.max()
+        pos_log_prob = parsing_dict["pos_log_prob"]
+        pos = parsing_dict["updated_pos"]
+        sent_ids = batch.id
+        loss_pos = self.hparams.pos_cost(pos_log_prob, pos, length=seq_len)
+        # the special oracle and supervision is already done for head, dep 
+        # for the transition based oracle
+        if sb.Stage.TEST != stage:
+            self.hparams.acc_dyna.append(
+                parsing_dict["parse_log_prob"],
+                parsing_dict["oracle_parsing"],
+                parsing_dict["oracle_parse_len"],
+            )
+            #need to encode decision_taken as one-hot for the metric
+            decision_taken = parsing_dict["decision_taken"]
+            # Replace padding by another value in range of transitions, will be ignored by the metrics because of oracle_parse_len
+            decision_taken[decision_taken==-100] = 0
+            decision_taken_one_hot = torch.eye(self.hparams.number_transitions,device = self.device)[decision_taken]
+            self.hparams.acc_dyna_with_oracle.append(
+                decision_taken_one_hot,
+                parsing_dict["oracle_parsing"],
+                parsing_dict["oracle_parse_len"],
+            )
+
+            loss_parse = self.hparams.parse_cost(
+                parsing_dict["parse_log_prob"],
+                parsing_dict["oracle_parsing"],
+                parsing_dict["oracle_parse_len"],
+            )
+        # Compute the loss for each element based on decision and only keep relevant one.
+        # Allow to compute label in a batch way.
+            loss_label = self.hparams.label_cost(
+                parsing_dict["label_log_prob"],
+                parsing_dict["oracle_label"],
+                parsing_dict["oracle_label_len"],
+            )
+            loss_dict={"loss_pos": loss_pos,
+                   "loss_parse": loss_parse,
+                   "loss_label": loss_label
+                }
+        else: 
+            #dummy value, loss value for test is not to be considered
+            loss_dict={"loss_pos": 1,
+                   "loss_parse": 1,
+                   "loss_label": 1
+                }
+
+        # Populate the list that will be written at the end of the stage.
+        if sb.Stage.TRAIN != stage:
+            predicted_pos = [
+                [reverse_pos_dict.get(p.item()) for p in poss]
+                for poss in torch.argmax(pos_log_prob, dim=-1)
+            ]
+            #use gold word since the segmentation is gold with the BIO
+            gold_words = batch.words
+            self._create_data_from_parsed_tree(
+                parsing_dict["parsed_tree"], 
+                sent_ids, 
+                [x.split() for x in gold_words],
+                #predicted_words, 
+                predicted_pos
+            )
+        return loss_dict
+
+    def _create_data_from_parsed_tree(self, parsed_tree, sent_ids, words, pos):
+        # Bug in the case of word not having an head.
+        for p_t, sent, po, sent_id in zip(parsed_tree, words, pos, sent_ids):
+            self.data_valid[sent_id] = {"sent_id": sent_id, "sentence": []}
+            r = [w["head"] == 0 for k, w in p_t.items()]
+            has_root = any(r)
+            if has_root:
+                root_position = r.index(True) + 1
+            for i in range(len(sent)):
+                if i + 1 in p_t.keys():
+                    if p_t[i + 1]["head"] == 0:
+                        p_t[i + 1]["label"] = dep_label_dict["ROOT"]
+                    self.data_valid[sent_id]["sentence"].append(
+                        {
+                            "ID": i + 1,
+                            "FORM": sent[i],
+                            "UPOS": po[i],
+                            "HEAD": p_t[i + 1]["head"],
+                            "DEPREL": reverse_dep_label_dict.get(
+                                p_t[i + 1]["label"], "UNDEFINED"
+                            ),
+                        }
+                    )
+                elif not has_root:
+                    # If no head, this is the root
+                    self.data_valid[sent_id]["sentence"].append(
+                        {
+                            "ID": i + 1,
+                            "FORM": sent[i],
+                            "UPOS": po[i],
+                            "HEAD": 0,
+                            "DEPREL": "root",
+                        }
+                    )
+                    root_position = i + 1
+                else:
+                    self.data_valid[sent_id]["sentence"].append(
+                        {
+                            "ID": i + 1,
+                            "FORM": sent[i],
+                            "UPOS": po[i],
+                            "HEAD": root_position,
+                            "DEPREL": "DEFAULT_ROOT",
+                        }
+                    )
+
+    # -------------------------------------------------------------------------#
+
+    def on_fit_start(self):
+        """Gets called at the beginning of ``fit()``, on multiple processes
+        if ``distributed_count > 0`` and backend is ddp.
+        Default implementation compiles the jit modules, initializes
+        optimizers, and loads the latest checkpoint to resume training.
+        """
+        # Run this *after* starting all processes since jit modules cannot be
+        # pickled.
+        self._compile_jit()
+
+        # Wrap modules with parallel backend after jit
+        self._wrap_distributed()
+
+        # Initialize optimizers after parameters are configured
+        self.init_optimizers()
+
+        # Load latest checkpoint to resume training if interrupted
+        if self.checkpointer is not None:
+            ckpt = self.checkpointer.recover_if_possible(
+                # Only modification is : load which module are activated from checkpoint
+                device=torch.device(self.device)
+            )
+            if ckpt is not None:
+                self.hparams.parser.exploration_rate = ckpt.meta["exploration_rate"]
+
+
+    def on_evaluate_start(self, max_key=None, min_key=None):
+        """Gets called at the beginning of ``evaluate()``
+        Default implementation loads the best-performing checkpoint for
+        evaluation, based on stored metrics.
+        Arguments
+        ---------
+        max_key : str
+            Key to use for finding best checkpoint (higher is better).
+            By default, passed to ``self.checkpointer.recover_if_possible()``.
+        min_key : str
+            Key to use for finding best checkpoint (lower is better).
+            By default, passed to ``self.checkpointer.recover_if_possible()``.
+        """
+        # Recover best checkpoint for evaluation
+        if self.checkpointer is not None:
+            ckpt = self.checkpointer.recover_if_possible(
+                max_key=max_key,
+                min_key=min_key,
+                device=torch.device(self.device),
+            )
+            if ckpt is not None:
+                self.hparams.parser.exploration_rate = ckpt.meta["exploration_rate"]
+                self.is_training_syntax = ckpt.meta["is_training_syntax"]
+
+
+
+    def _save_intra_epoch_ckpt(self):
+        """Saves a CKPT with specific intra-epoch flag."""
+        self.checkpointer.save_and_keep_only(
+            end_of_epoch=False,
+            num_to_keep=1,
+            ckpt_predicate=lambda c: INTRA_EPOCH_CKPT_FLAG in c.meta,
+            meta={
+                INTRA_EPOCH_CKPT_FLAG: True,
+                "exploration_rate" : self.hparams.parser.exploration_rate,
+                "is_training_syntax": self.is_training_syntax
+            },
+            verbosity=logging.DEBUG,
+        )
 
     def init_optimizers(self):
         "Initializes the wav2vec2 optimizer and model optimizer"
@@ -414,6 +595,7 @@ class ASR(sb.core.Brain):
             self.optimizer_step_limit is not None
             and self.optimizer_step >= self.optimizer_step_limit
         )
+
 
     def fit(
         self,
@@ -582,6 +764,7 @@ class ASR(sb.core.Brain):
             ):
                 break
 
+
     def on_fit_start(self):
         """Gets called at the beginning of ``fit()``, on multiple processes
         if ``distributed_count > 0`` and backend is ddp.
@@ -607,85 +790,13 @@ class ASR(sb.core.Brain):
             if ckpt is not None:
                 self.is_training_syntax = ckpt.meta["is_training_syntax"]
 
-    def on_evaluate_start(self, max_key=None, min_key=None):
-        """Gets called at the beginning of ``evaluate()``
-        Default implementation loads the best-performing checkpoint for
-        evaluation, based on stored metrics.
-        Arguments
-        ---------
-        max_key : str
-            Key to use for finding best checkpoint (higher is better).
-            By default, passed to ``self.checkpointer.recover_if_possible()``.
-        min_key : str
-            Key to use for finding best checkpoint (lower is better).
-            By default, passed to ``self.checkpointer.recover_if_possible()``.
-        """
-        # Recover best checkpoint for evaluation
-        if self.checkpointer is not None:
-            ckpt = self.checkpointer.recover_if_possible(
-                max_key=max_key,
-                min_key=min_key,
-                device=torch.device(self.device),
-            )
-            if ckpt is not None:
-                self.is_training_syntax = ckpt.meta["is_training_syntax"]
-
-    def _save_intra_epoch_ckpt(self):
-        """Saves a CKPT with specific intra-epoch flag."""
-        self.checkpointer.save_and_keep_only(
-            end_of_epoch=False,
-            num_to_keep=1,
-            ckpt_predicate=lambda c: INTRA_EPOCH_CKPT_FLAG in c.meta,
-            meta={
-                INTRA_EPOCH_CKPT_FLAG: True,
-                "is_training_syntax": self.is_training_syntax,
-            },
-            verbosity=logging.DEBUG,
-        )
-
-    def fit_batch(self, batch):
-        """Train the parameters given a single batch in input"""
-        if self.auto_mix_prec:
-
-            self.wav2vec_optimizer.zero_grad()
-            self.model_optimizer.zero_grad()
-
-            with torch.cuda.amp.autocast():
-                outputs = self.compute_forward(batch, sb.Stage.TRAIN)
-                loss = self.compute_objectives(outputs, batch, sb.Stage.TRAIN)
-
-            self.scaler.scale(loss).backward()
-            self.scaler.unscale_(self.wav2vec_optimizer)
-            self.scaler.unscale_(self.model_optimizer)
-
-            if self.check_gradients(loss):
-                self.scaler.step(self.wav2vec_optimizer)
-                self.scaler.step(self.adam_optimizer)
-
-            self.scaler.update()
-        else:
-            outputs = self.compute_forward(batch, sb.Stage.TRAIN)
-
-            loss = self.compute_objectives(outputs, batch, sb.Stage.TRAIN)
-            loss.backward()
-            if self.check_gradients(loss):
-                self.wav2vec_optimizer.step()
-                self.model_optimizer.step()
-
-            self.wav2vec_optimizer.zero_grad()
-            self.model_optimizer.zero_grad()
-
-        return loss.detach()
-
-    def evaluate_batch(self, batch, stage):
-        """Computations needed for validation/test batches"""
-        predictions = self.compute_forward(batch, stage=stage)
-        with torch.no_grad():
-            loss = self.compute_objectives(predictions, batch, stage=stage)
-        return loss.detach()
 
     def on_stage_start(self, stage, epoch):
         """Gets called at the beginning of each epoch"""
+        self.hparams.acc_dyna.correct = 0
+        self.hparams.acc_dyna.total = 0
+        self.hparams.acc_dyna_with_oracle.correct = 0
+        self.hparams.acc_dyna_with_oracle.total = 0
         if stage != sb.Stage.TRAIN:
             self.cer_metric = self.hparams.cer_computer()
             self.wer_metric = self.hparams.error_rate_computer()
@@ -693,17 +804,31 @@ class ASR(sb.core.Brain):
             self.gov2Label_metrics = self.hparams.gov2Label_computer()
             self.stage_wer_details = []
 
-    def on_stage_end(self, stage, stage_loss, epoch):
-        """Gets called at the end of an epoch."""
-        # Compute/store important stats
+
+
+    def on_stage_end(self, stage, stage_loss, epoch=None):
         stage_stats = {"loss": stage_loss}
-        if stage == sb.Stage.TRAIN:
-            self.train_stats = stage_stats
-        else:
+        if stage != sb.Stage.TRAIN:
             stage_stats["CER"] = self.cer_metric.summarize("error_rate")
             stage_stats["WER"] = self.wer_metric.summarize("error_rate")
-            # Activate syntax module for training once ASR is good enough
-            if self.is_training_syntax:
+        if self.is_training_syntax:
+            if stage == sb.Stage.TRAIN:
+                stage_stats["acc_dyna"] = self.hparams.acc_dyna.summarize()
+                stage_stats["acc_with_oracle_help"] = self.hparams.acc_dyna_with_oracle.summarize()
+                stage_stats["exploration_rate"] = self.hparams.parser.get_exploration_rate()
+                self.train_stats = stage_stats
+                print(
+                        f"loss: {stage_loss}, acc_to_oracle : {self.hparams.acc_dyna.summarize()}, acc_with_oracle_help : {self.hparams.acc_dyna_with_oracle.summarize()}, exploration_rate: {self.hparams.parser.get_exploration_rate()}"
+                )
+
+            if stage == sb.Stage.VALID:
+                stage_stats["acc_dyna"] = self.hparams.acc_dyna.summarize()
+                stage_stats["acc_with_oracle_help"] = self.hparams.acc_dyna_with_oracle.summarize()
+                stage_stats["exploration_rate"] = self.hparams.parser.get_exploration_rate()
+                print(
+                        f"loss: {stage_loss}, acc_to_oracle : {self.hparams.acc_dyna.summarize()}"
+                )
+            if stage != sb.Stage.TRAIN:  # metrics value
                 if stage == sb.Stage.VALID:
                     st = self.hparams.dev_output_conllu
                     goldPath_CoNLLU = self.hparams.dev_gold_conllu
@@ -721,32 +846,53 @@ class ASR(sb.core.Brain):
                 )
                 with open(alig_file, "w", encoding="utf-8") as f_out:
                     print_alignments(self.stage_wer_details, file=f_out)
-                self._convert_tree_to_conllu()
+
                 with open(st, "w", encoding="utf-8") as f_v:
                     write_token_dict_conllu(self.data_valid, f_v, order=order)
-                self.result_trees = []
-                self.data_valid = {}
 
+
+                self.data_valid = {}
                 d = types.SimpleNamespace()
                 d.system_file = st
                 d.gold_file = goldPath_CoNLLU
                 d.alignment_file = alig_file
-                metrics_dict = self.hparams.evaluator.evaluate_wrapper(d)
+                d.gold_segmentation = True
+                metrics = self.hparams.evaluator.evaluate_wrapper(d)
+                stage_stats["LAS"] = metrics["LAS"].f1 * 100
+                stage_stats["UAS"] = metrics["UAS"].f1 * 100
+                stage_stats["UPOS"] = metrics["UPOS"].f1 * 100
+                print(
+                    f"UPOS : {stage_stats['UPOS']} , UAS : {stage_stats['UAS']} LAS : {stage_stats['LAS']}"
+                )
 
-                stage_stats["LAS"] = metrics_dict["LAS"].f1 * 100
-                stage_stats["UAS"] = metrics_dict["UAS"].f1 * 100
-                stage_stats["SER"] = metrics_dict["seg_error_rate"].precision * 100
-                stage_stats["SENTENCES"] = metrics_dict["Sentences"].precision * 100
-                stage_stats["Tokens"] = metrics_dict["Tokens"].precision * 100
-                stage_stats["UPOS"] = metrics_dict["UPOS"].f1 * 100
-            try:
-                start_syntax_wer = self.hparams.start_syntax_WER
-            except:
-                start_syntax_wer = 50
-            if stage_stats["WER"] < start_syntax_wer and not self.is_training_syntax:
-                print("activating training syntax")
-                self.is_training_syntax = True
-        # Perform end-of-iteration things, like annealing, logging, etc.
+            if (
+                stage == sb.Stage.VALID
+            ):  # Optimization of learning rate, logging, checkpointing
+                wandb_stats = {"epoch": epoch}
+                wandb_stats = {**wandb_stats, **stage_stats}
+                wandb.log(wandb_stats)
+                self.checkpointer.save_and_keep_only(
+                    meta={"LAS": stage_stats["LAS"],
+                        "exploration_rate": self.hparams.parser.exploration_rate},
+                    max_keys=["LAS"]
+                )
+            # update the exploration rate
+            if stage == sb.Stage.VALID and epoch > self.hparams.number_of_epochs_static:
+                self.hparams.parser.update_exploration_rate(
+                    self.hparams.scheduler.update_rate(self.hparams.parser.exploration_rate)
+                )
+        else:
+            if stage == sb.Stage.TRAIN:
+                self.train_stats = stage_stats
+            else:
+                try:
+                    start_syntax_wer = self.hparams.start_syntax_WER
+                except:
+                    start_syntax_wer = 50
+                if stage_stats["WER"] < start_syntax_wer and not self.is_training_syntax:
+                    print("activating training syntax")
+                    self.is_training_syntax = True
+
         if stage == sb.Stage.VALID:
             old_lr_model, new_lr_model = self.hparams.lr_annealing_model(
                 stage_stats["loss"]
@@ -796,93 +942,48 @@ class ASR(sb.core.Brain):
             with open(self.hparams.wer_file, "w") as w:
                 self.wer_metric.write_stats(w)
 
-    # to debug
-    def transcribe_dataset(
-        self,
-        dataset,  # Must be obtained from the dataio_function
-        min_key,  # We load the model with the lowest WER
-        loader_kwargs,  # opts for the dataloading
-        max_key=None,
-    ):
-        # If dataset isn't a Dataloader, we create it.
-        if not isinstance(dataset, DataLoader):
-            loader_kwargs["ckpt_prefix"] = None
-            dataset = self.make_dataloader(dataset, sb.Stage.TEST, **loader_kwargs)
-        # loading best model
-        self.on_evaluate_start(min_key=min_key, max_key=max_key)
-        self.wer_metric = self.hparams.error_rate_computer()
-        # eval mode (remove dropout etc)
-        self.modules.eval()
 
-        # Now we iterate over the dataset and we simply compute_forward and decode
-        with torch.no_grad():
-            WER = []
-            for batch in tqdm(dataset, dynamic_ncols=True):
 
-                # Make sure that your compute_forward returns the predictions !!!
-                # In the case of the template, when stage = TEST, a beam search is applied
-                # in compute_forward().
-                ids = batch.id
-                predictions = self.compute_forward(batch, stage=sb.Stage.TEST)
-                (
-                    p_ctc,
-                    wav_lens,
-                    p_depLabel,
-                    p_govLabel,
-                    p_posLabel,
-                    seq_len,
-                ) = predictions
+    def fit_batch(self, batch):
+        """Train the parameters given a single batch in input"""
+        if self.auto_mix_prec:
 
-                sequence = sb.decoders.ctc_greedy_decode(
-                    p_ctc, wav_lens, blank_id=self.hparams.blank_index
-                )
-                # We go from tokens to words.
-                predicted_words = self.tokenizer(sequence, task="decode_from_list")
-                for i, sent in enumerate(predicted_words):
-                    for w in sent:
-                        if w == "":
-                            predicted_words[i] = [w for w in sent if w != ""]
-                            if len(predicted_words[i]) == 0:
-                                predicted_words[i].append("EMPTY_ASR")
+            self.wav2vec_optimizer.zero_grad()
+            self.model_optimizer.zero_grad()
 
-                tokens, tokens_lens = batch.tokens
-                target_words = undo_padding(tokens, tokens_lens)
-                target_words = self.tokenizer(target_words, task="decode_from_list")
-                wer_details = wer_details_for_batch(
-                    ids=ids,
-                    refs=target_words,
-                    hyps=predicted_words,
-                    compute_alignments=True,
-                )
-                WER.extend(wer_details)
-                self.wer_metric.append(ids, predicted_words, target_words)
-            st = self.hparams.test_output_conllu
+            with torch.cuda.amp.autocast():
+                outputs = self.compute_forward(batch, sb.Stage.TRAIN)
+                loss = self.compute_objectives(outputs, batch, sb.Stage.TRAIN)
 
-            order = self.test_order
+            self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.wav2vec_optimizer)
+            self.scaler.unscale_(self.model_optimizer)
 
-            WER = natsorted(WER, key=itemgetter(*["key"]))
-            with open(self.hparams.alig_path + "_test", "w", encoding="utf-8") as f_out:
-                print_alignments(WER, file=f_out)
+            if self.check_gradients(loss):
+                self.scaler.step(self.wav2vec_optimizer)
+                self.scaler.step(self.adam_optimizer)
 
-            wer_metric = self.wer_metric.summarize()
-            print(f"WER : {wer_metric}")
+            self.scaler.update()
+        else:
+            outputs = self.compute_forward(batch, sb.Stage.TRAIN)
 
-    def _convert_tree_to_conllu(self):
-        for tree in self.result_trees:
-            s_id = tree["sent_id"]
-            self.data_valid[s_id] = {"sent_id": s_id, "sentence": []}
-            for i, (edge, pos, f) in enumerate(
-                zip(tree["edges"], tree["pos_tags"], tree["form"]), start=1
-            ):
-                self.data_valid[s_id]["sentence"].append(
-                    {
-                        "ID": i,
-                        "FORM": f,
-                        "UPOS": pos,
-                        "HEAD": edge[0],
-                        "DEPREL": edge[1],
-                    }
-                )
+            loss = self.compute_objectives(outputs, batch, sb.Stage.TRAIN)
+            loss.backward()
+            if self.check_gradients(loss):
+                self.wav2vec_optimizer.step()
+                self.model_optimizer.step()
+
+            self.wav2vec_optimizer.zero_grad()
+            self.model_optimizer.zero_grad()
+
+        return loss.detach()
+
+
+    def create_words_list(self, words):
+        words_list = []
+        for i, w in enumerate(words):
+            words_list.append(Word(w, i + 1))
+        return words_list
 
 
 # Define custom data procedure
@@ -928,6 +1029,7 @@ def dataio_prepare(hparams, tokenizer):
         csv_path=hparams["valid_csv"],
         replacements={"data_root": data_folder},
     )
+
     # We also sort the validation data so it is faster to validate
     valid_data = valid_data.filtered_sorted(sort_key="duration")
 
@@ -941,7 +1043,10 @@ def dataio_prepare(hparams, tokenizer):
 
     datasets = [train_data, valid_data, test_data]
 
-    # 2. Define audio pipeline:
+
+    # 2. Define text pipeline:
+
+
     @sb.utils.data_pipeline.takes("wav")
     @sb.utils.data_pipeline.provides("sig")
     def audio_pipeline(wav):
@@ -966,28 +1071,20 @@ def dataio_prepare(hparams, tokenizer):
 
     sb.dataio.dataset.add_dynamic_item(datasets, audio_pipeline)
 
-    # 3. Define text pipeline:
+
+    # 2. Define text pipeline:
     @sb.utils.data_pipeline.takes("wrd")
     @sb.utils.data_pipeline.provides(
-        "wrd", "tokens_list", "tokens_bos", "tokens_eos", "tokens"
+        "words",
+        "tokens_list",
+        "tokens_bos",
+        "tokens_eos",
+        "tokens",
+        "tokens_conllu",
     )
-    def text_pipeline(wrd):
-        """
-        ASR pipeline
-        Parameters
-        ----------
-        wrd : The word contained in the CSV file
-
-        Returns
-        tokens_list : the tokenized word list
-        token_bos : the tokenized word begining with BOS tag (thus sentence shifted to the right)
-        token_eos : the tokenized word ending with EOS tag
-        tokens :  the tokenized word tensor
-        -------
-
-        """
-        yield wrd
-        tokens_list = tokenizer.sp.encode_as_ids(wrd)
+    def text_pipeline(words):
+        yield words
+        tokens_list = tokenizer.sp.encode_as_ids(words)
         yield tokens_list
         tokens_bos = torch.LongTensor([hparams["bos_index"]] + (tokens_list))
         yield tokens_bos
@@ -998,43 +1095,61 @@ def dataio_prepare(hparams, tokenizer):
 
     sb.dataio.dataset.add_dynamic_item(datasets, text_pipeline)
 
-    # 4. Define dependency pipeline
-
     @sb.utils.data_pipeline.takes("pos", "gov", "dep")
     @sb.utils.data_pipeline.provides("pos_tokens", "head", "dep_tokens")
     def syntax_pipeline(pos, head, dep):
-        poss = pos.split(" ")
-        poss.insert(0, "ROOT")
+        poss = pos.upper().split(" ")
         pos_tokens = torch.tensor([pos_dict.get(p) for p in poss])
         yield pos_tokens
-        he = head.split(" ")
-        head = [int(h) for h in he]
-        head.insert(0, 0)
-        yield torch.tensor(head)
-        de = dep.split(" ")
-        de.insert(0, "ROOT")
+        he = [int(x) for x in head.split(" ")]
+        yield torch.tensor(he)
+        de = dep.upper().split(" ")
         dep_token = torch.tensor([dep_label_dict.get(d) for d in de])
         yield dep_token
 
     sb.dataio.dataset.add_dynamic_item(datasets, syntax_pipeline)
 
-    # 4. Set output:
+    
+    #Define BIO pipeline
+
+    @sb.utils.data_pipeline.takes("start_word", "end_word")
+    @sb.utils.data_pipeline.provides(
+        "start_words", "end_words"
+    )
+    def BIO_pipeline(start_word, end_word):
+        # we remove the first value (begin) to each value
+        # since the timestamp is for the whole file in Orfeo and not the segment
+        # Note, small bias since the first frame will always be a B followed by a few I
+        start_word = start_word.split(" ")
+        begin_time = float(start_word[0])
+        start_words =  torch.tensor([float(x) - begin_time for x in start_word])
+        yield start_words
+        end_words =  torch.tensor([float(x) - begin_time for x in end_word.split(" ")])
+        yield end_words
+
+    sb.dataio.dataset.add_dynamic_item(datasets, BIO_pipeline)
+
+
+    # 3. Set output:
     sb.dataio.dataset.set_output_keys(
         datasets,
         [
             "id",
             "sig",
-            "wrd",
+            "words",
+            "tokens_list",
             "tokens_bos",
             "tokens_eos",
             "tokens",
             "pos_tokens",
             "head",
             "dep_tokens",
+            "start_words",
+            "end_words"
+
         ],
     )
     return train_data, valid_data, test_data
-
 
 def get_id_from_CoNLLfile(path):
     """
@@ -1050,24 +1165,24 @@ def get_id_from_CoNLLfile(path):
     return sent_id
 
 
+
 dep_label_dict = {
-    "periph": 0,
-    "subj": 1,
-    "root": 2,
-    "dep": 3,
-    "dm": 4,
-    "spe": 5,
-    "mark": 6,
-    "para": 7,
-    "aux": 8,
-    "disflink": 9,
-    "morph": 10,
-    "parenth": 11,
-    "aff": 12,
-    "ROOT": 13,
+    "PERIPH": 0,
+    "SUBJ": 1,
+    "ROOT": 2,
+    "DEP": 3,
+    "DM": 4,
+    "SPE": 5,
+    "MARK": 6,
+    "PARA": 7,
+    "AUX": 8,
+    "DISFLINK": 9,
+    "MORPH": 10,
+    "PARENTH": 11,
+    "AFF": 12,
     "__JOKER__": 14,
-    "DELETION": 15,
-    "INSERTION": 16,
+    "INSERTION": 15,
+    "DELETION": 16,
 }
 reverse_dep_label_dict = {v: k for k, v in dep_label_dict.items()}
 
@@ -1094,9 +1209,7 @@ pos_dict = {
     "X": 18,
     "CLN": 19,
     "VPR": 20,
-    "ROOT": 21,
-    "DELETION": 22,
-    "INSERTION": 23,
+    "INSERTION": 21,
 }
 
 reverse_pos_dict = {v: k for k, v in pos_dict.items()}
@@ -1104,31 +1217,27 @@ reverse_pos_dict = {v: k for k, v in pos_dict.items()}
 label_alphabet = [dep_label_dict, pos_dict]
 reverse_label_alphabet = [reverse_dep_label_dict, reverse_pos_dict]
 
-if __name__ == "__main__":
-    wandb.init(group="Audio")
-    print(f"wandb run name : {wandb.run.name}")
+BIO_dict = {"<start>":0,
+        "begin": 1,
+        "inside": 2,
+        "outside": 3,
+        "<end>": 4}
+
+
+def main():
+    wandb.init()
+    # end test debug
     # Load hyperparameters file with command-line overrides
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
+
     with open(hparams_file) as fin:
         hparams = load_hyperpyyaml(fin, overrides)
-
-    goldPath_CoNLLU_dev = hparams["dev_gold_conllu"]
-    goldPath_CoNLLU_test = hparams["test_gold_conllu"]
 
     # If distributed_launch=True then
     # create ddp_group with the right communication protocol
     sb.utils.distributed.ddp_init_group(run_opts)
 
-    # Dataset preparation (parsing CommonVoice)
     from cefcOrfeo_prepare import prepare_cefcOrfeo  # noqa
-
-    # Create experiment directory
-    sb.create_experiment_directory(
-        experiment_directory=hparams["output_folder"],
-        hyperparams_to_save=hparams_file,
-        overrides=overrides,
-    )
-
     # Due to DDP, we do the preparation ONLY on the main python process
     run_on_main(
         prepare_cefcOrfeo,
@@ -1143,7 +1252,14 @@ if __name__ == "__main__":
         },
     )
 
-    # Defining tokenizer and loading it
+
+    # Create experiment directory
+    sb.create_experiment_directory(
+        experiment_directory=hparams["output_folder"],
+        hyperparams_to_save=hparams_file,
+        overrides=overrides,
+    )
+
     tokenizer = SentencePiece(
         model_dir=hparams["save_folder"],
         vocab_size=hparams["output_neurons"],
@@ -1152,20 +1268,17 @@ if __name__ == "__main__":
         model_type=hparams["token_type"],
         character_coverage=hparams["character_coverage"],
     )
-
     # Create the datasets objects as well as tokenization and encoding :-D
     train_data, valid_data, test_data = dataio_prepare(hparams, tokenizer)
 
-    # Trainer initialization
-    asr_brain = ASR(
+    asr_brain = Parser(
         modules=hparams["modules"],
         hparams=hparams,
         run_opts=run_opts,
         checkpointer=hparams["checkpointer"],
     )
-    asr_brain.count_param_module()
-
-    # Adding objects to trainer.
+    print(asr_brain.device)
+        # Adding objects to trainer.
     # doing this to avoid overwriting the class constructor
     asr_brain.tokenizer = tokenizer
     asr_brain.result_trees = []
@@ -1177,44 +1290,31 @@ if __name__ == "__main__":
     asr_brain.test_order = get_id_from_CoNLLfile(hparams["test_gold_conllu"])
     encoding = asr_brain.hparams.encoding
     asr_brain.optimizer_step_limit = None
-    # Training
-    try:
-        asr_brain.fit(
-            asr_brain.hparams.epoch_counter,
-            train_data,
-            valid_data,
-            train_loader_kwargs=hparams["dataloader_options"],
-            valid_loader_kwargs=hparams["test_dataloader_options"],
-        )
-    except RuntimeError as e:  # Memory Leak
-        import gc
 
-        for obj in gc.get_objects():
-            try:
-                if torch.is_tensor(obj) or (
-                    hasattr(obj, "data") and torch.is_tensor(obj.data)
-                ):
-                    pass
-                    # print(type(obj), obj.size())
-            except:
-                pass
-        raise RuntimeError() from e
-    # Test
-    asr_brain.hparams.wer_file = hparams["output_folder"] + "/wer_test.txt"
-    asr_brain.evaluate(
+    asr_brain.count_param_module()
+    asr_brain.fit(
+        asr_brain.hparams.epoch_counter,
+        train_data,
+        valid_data,
+        train_loader_kwargs=hparams["dataloader_options"],
+        valid_loader_kwargs=hparams["test_dataloader_options"],
+     )
+
+    brain.evaluate(
         test_data,
-        min_key="WER",
-        test_loader_kwargs=hparams["test_dataloader_options"],
+        max_key='LAS',
+        test_loader_kwargs=hparams["test_dataloader_options"]
     )
 
-    # transcribe
-    """
-    run_on_main(
-        asr_brain.transcribe_dataset,
-        kwargs={
-            "dataset": test_data,
-            "min_key": "WER",
-            "loader_kwargs": hparams["test_dataloader_options"],
-        },
-    )
-    """
+    # print(brain.profiler.key_averages().table(sort_by="self_cpu_time_total"))
+
+
+if __name__ == "__main__":
+    #import cProfile, pstats
+
+    # profiler = cProfile.Profile()
+    # profiler.enable()
+    main()
+    # profiler.disable()
+    # stats = pstats.Stats(profiler).sort_stats("cumtime")
+    # stats.print_stats()

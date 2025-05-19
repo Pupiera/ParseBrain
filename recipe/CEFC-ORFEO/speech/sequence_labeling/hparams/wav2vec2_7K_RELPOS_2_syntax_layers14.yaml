@@ -7,7 +7,7 @@
 # Seed needs to be set at top of yaml, before objects with parameters are made
 seed: 1234
 __set_seed: !!python/object/apply:torch.manual_seed [!ref <seed>]
-output_folder: !ref results/wav2vec2_ctc_FR_AUDIO/<seed>
+output_folder: !ref results/wav2vec2_ctc_FR_AUDIO_2_syntax_layers_14/<seed>
 wer_file: !ref <output_folder>/wer.txt
 save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
@@ -39,6 +39,9 @@ transcript_file: transcript_test_AUDIO
 avoid_if_longer_than: 10.0
 
 avoid_if_shorter_than: 0.3
+
+
+syntax_layers: 14
 
 # Training parameters
 number_of_epochs: 30
@@ -112,29 +115,69 @@ RepFusionModel: !new:speechbrain.nnet.RNN.LSTM
 # DEP2LABEL
 #
 input_size: !ref <repFusionHidden> #* !ref <repFusionBidirectional>+1
-dep2LabelHidden: 800
+dep2LabelHidden: 768
 output_neuronsDep: 19 #Nb Label of dep
 output_neuronsGov: 846 #Nb label of Gov + relPos
 output_neuronsPOS: 23 #Nb different POS
 dep2LabelFeat: !new:speechbrain.nnet.RNN.LSTM
     input_shape: [null,null, !ref <input_size>]
     hidden_size: !ref <dep2LabelHidden>
-    num_layers: 2
+    num_layers: 3
     bias: True
     dropout: 0.5
     bidirectional: True
 
-depDep2Label: !new:speechbrain.nnet.linear.Linear
-    input_size: !ref <dep2LabelHidden>*2
+
+depDep2Label: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, !ref <dep2LabelHidden> * 2 ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.50
+  linear_head: !name:speechbrain.nnet.linear.Linear
     n_neurons: !ref <output_neuronsDep>
+    bias: True
 
-govDep2Label: !new:speechbrain.nnet.linear.Linear
-    input_size:  !ref <dep2LabelHidden>*2
+    #depDep2Label: !new:speechbrain.nnet.linear.Linear
+    #input_size: !ref <dep2LabelHidden>*2
+    #n_neurons: !ref <output_neuronsDep>
+
+govDep2Label: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, !ref <dep2LabelHidden> * 2 ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.50
+  linear_head: !name:speechbrain.nnet.linear.Linear
     n_neurons: !ref <output_neuronsGov>
+    bias: True
 
-posDep2Label: !new:speechbrain.nnet.linear.Linear
-    input_size:  !ref <dep2LabelHidden>*2
+    #govDep2Label: !new:speechbrain.nnet.linear.Linear
+    #input_size:  !ref <dep2LabelHidden>*2
+    #n_neurons: !ref <output_neuronsGov>
+
+posDep2Label: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, !ref <dep2LabelHidden> * 2 ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.50
+  linear_head: !name:speechbrain.nnet.linear.Linear
     n_neurons: !ref <output_neuronsPOS>
+    bias: True
+
+    #posDep2Label: !new:speechbrain.nnet.linear.Linear
+    #input_size:  !ref <dep2LabelHidden>*2
+    #n_neurons: !ref <output_neuronsPOS>
 
 #
 # Functions and classes
@@ -173,6 +216,7 @@ wav2vec2: !new:speechbrain.lobes.models.huggingface_wav2vec.HuggingFaceWav2Vec2
     output_norm: True
     freeze: !ref <freeze_wav2vec>
     save_path: !ref <save_folder>/wav2vec2_checkpoint
+    output_all_hiddens: True
 
 #####
 # Uncomment this block if you prefer to use a Fairseq pretrained model instead

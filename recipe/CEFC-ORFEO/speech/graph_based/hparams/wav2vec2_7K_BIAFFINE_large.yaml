@@ -1,5 +1,5 @@
 # ################################
-# Model: wav2vec2 + DNN + ASRDEP2LABEL
+# Model: wav2vec2 + DNN + Biaffine parser
 # Augmentation: SpecAugment
 # Authors: Titouan Parcollet 2021 + Adrien PUPIER 2022
 # ################################
@@ -109,32 +109,114 @@ RepFusionModel: !new:speechbrain.nnet.RNN.LSTM
     bidirectional: !ref <repFusionBidirectional>
 
 #
-# DEP2LABEL
+# Embedding layer (Unique purpose is to get a representation for ROOT dummy tokens.
 #
-input_size: !ref <repFusionHidden> #* !ref <repFusionBidirectional>+1
-dep2LabelHidden: 800
-output_neuronsDep: 19 #Nb Label of dep
-output_neuronsGov: 846 #Nb label of Gov + relPos
-output_neuronsPOS: 23 #Nb different POS
-dep2LabelFeat: !new:speechbrain.nnet.RNN.LSTM
-    input_shape: [null,null, !ref <input_size>]
-    hidden_size: !ref <dep2LabelHidden>
-    num_layers: 2
+
+embedding_root: !new:speechbrain.nnet.embedding.Embedding
+  num_embeddings: 1
+  embedding_dim: 500
+  consider_as_one_hot: False
+
+#
+# GRAPH Parser
+#
+number_pos: 24
+num_labels: 17
+mlp_input: !ref <rnn_hidden_size> * 2
+
+pos_tagger: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, !ref <mlp_input> ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
     bias: True
-    dropout: 0.5
-    bidirectional: True
+  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.50
+  linear_head: !name:speechbrain.nnet.linear.Linear
+    n_neurons: !ref <number_pos>
+    bias: True
+  log_softmax: !new:speechbrain.nnet.activations.Softmax
+    apply_log: True
 
-depDep2Label: !new:speechbrain.nnet.linear.Linear
-    input_size: !ref <dep2LabelHidden>*2
-    n_neurons: !ref <output_neuronsDep>
 
-govDep2Label: !new:speechbrain.nnet.linear.Linear
-    input_size:  !ref <dep2LabelHidden>*2
-    n_neurons: !ref <output_neuronsGov>
+arc_d: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, !ref <mlp_input> ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.50
+  linear_head: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 768
+    bias: True
 
-posDep2Label: !new:speechbrain.nnet.linear.Linear
-    input_size:  !ref <dep2LabelHidden>*2
-    n_neurons: !ref <output_neuronsPOS>
+arc_h: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, !ref <mlp_input> ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.50
+  linear_head: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 768
+    bias: True
+
+lab_d: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, !ref <mlp_input> ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.50
+  linear_head: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 768
+    bias: True
+
+lab_h: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [ null, null, !ref <mlp_input> ]
+  linear1: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 1024
+    bias: True
+  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation: !new:torch.nn.LeakyReLU
+  drop: !new:torch.nn.Dropout
+    p: 0.50
+  linear_head: !name:speechbrain.nnet.linear.Linear
+    n_neurons: 768
+    bias: True
+
+
+# same value than in hops
+rnn_hidden_size: 768
+rnn_num_layer: 3
+rnn_bidirectional: True
+rnn_input: !ref <repFusionHidden>
+
+rnn:  !new:speechbrain.nnet.RNN.LSTM
+  input_shape: [null, null, !ref <rnn_input>]
+  hidden_size: !ref <rnn_hidden_size>
+  num_layers: !ref <rnn_num_layer>
+  bias: True
+  dropout: 0.5
+  bidirectional: !ref <rnn_bidirectional>
+
+graph_parser: !new:parsebrain.processing.dependency_parsing.graph_based.BiAffineParser
+  pos_tagger: !ref <pos_tagger>
+  arc_h: !ref <arc_h>
+  arc_d: !ref <arc_d>
+  lab_h: !ref <lab_h>
+  lab_d: !ref <lab_d>
+  biased_biaffine: True
+  input_size: 768
+  num_labels: !ref <num_labels>
+
 
 #
 # Functions and classes
@@ -214,15 +296,21 @@ modules:
     enc: !ref <enc>
     ctc_lin: !ref <ctc_lin>
     RepFusionModel: !ref <RepFusionModel>
-    dep2LabelFeat : !ref <dep2LabelFeat>
-    depDep2Label: !ref <depDep2Label>
-    govDep2Label: !ref <govDep2Label>
-    posDep2Label: !ref <posDep2Label>
+    posTagger: !ref <pos_tagger>
+    arc_h: !ref <arc_h>
+    arc_d: !ref <arc_d>
+    lab_h: !ref <lab_h>
+    lab_d: !ref <lab_d>
+    rnn: !ref <rnn>
+    graph_parser: !ref <graph_parser>
+    embedding_root: !ref <embedding_root>
+
 
 
 model: !new:torch.nn.ModuleList
-    - [!ref <enc>, !ref <ctc_lin>, !ref <RepFusionModel>, !ref <dep2LabelFeat>,
-       !ref <posDep2Label>, !ref <depDep2Label>, !ref <govDep2Label>]
+    - [!ref <enc>, !ref <ctc_lin>, !ref <RepFusionModel>, !ref <pos_tagger>,
+       !ref <arc_h>, !ref <arc_d>, !ref <lab_h>, !ref <lab_d>, !ref <rnn>,
+       !ref <embedding_root>]
 
 model_opt_class: !name:torch.optim.Adadelta
     lr: !ref <lr>
@@ -275,15 +363,14 @@ gov2Label_computer: !name:speechbrain.utils.metric_stats.BinaryMetricStats
 # PARSING ARCHI
 #
 
+LABEL_PADDING: -100
+
 reader_alig:  !new:parsebrain.processing.dependency_parsing.sequence_labeling.alignment_oracle.reader.ReaderSpeechbrain
 
-oracle: !new:parsebrain.processing.dependency_parsing.sequence_labeling.alignment_oracle.OracleRelPos
+oracle: !new:parsebrain.processing.dependency_parsing.graph_based.alignment_oracle.AlignmentOracle
     reader_alig: !ref <reader_alig>
 
-eval_st : !new:parsebrain.processing.dependency_parsing.eval.speech_conll18_ud_eval.SpeechEval
-
-evaluator: !new:parsebrain.processing.dependency_parsing.sequence_labeling.encoding.DecoderRelPos
-    eval_st: !ref <eval_st>
+evaluator : !new:parsebrain.processing.dependency_parsing.eval.speech_conll18_ud_eval.SpeechEval
 
 encoding: !new:parsebrain.processing.dependency_parsing.sequence_labeling.encoding.RelPosEncoding
 
