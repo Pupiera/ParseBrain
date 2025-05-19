@@ -6,6 +6,8 @@ import math
 import sys
 import types
 
+import logging
+
 import speechbrain as sb
 import torch
 from hyperpyyaml import load_hyperpyyaml
@@ -26,6 +28,8 @@ from parsebrain.processing.dependency_parsing.transition_based.configuration imp
 # todo: update transition based arc eager with unshift + disallow reduce if the root element has no deps yet
 from transformers import CamembertModel, CamembertTokenizerFast
 
+INTRA_EPOCH_CKPT_FLAG = "brain_intra_epoch_ckpt"
+
 
 # @export
 # @profile_optimiser
@@ -39,7 +43,7 @@ class Parser(sb.core.Brain):
         )
 
         if hasattr(self.hparams, "encoder_rnn"):
-            features, hidden = self.hparams.encoder_rnn(features)
+            features, hidden = self.modules.encoder_rnn(features)
         batch_size = features.shape[0]
         seq_len = torch.tensor([len(w) for w in batch.words]).to(self.device)
         config = []
@@ -81,8 +85,9 @@ class Parser(sb.core.Brain):
                 config, stage, gold_config, static=static
             )
         else:
+            #gold config for valid to compute stat but none for test
+            #import pudb; pudb.set_trace()
             parsing_dict = self.hparams.parser.parse(config, stage, gold_config)
-        # print(parsing_dict["parsed_tree"])
         return parsing_dict, seq_len, pos_log_prob
 
     def compute_objectives(self, predictions, batch, stage):
@@ -91,38 +96,44 @@ class Parser(sb.core.Brain):
         words = batch.words
         pos = batch.pos_tokens.data.to(self.device)
         sent_ids = batch.sent_id
-        """
-        print(sent_ids)
-        print(stage)
-        print("DECISION")
-        print(parsing_dict["parse_log_prob"])
-        print(torch.exp(parsing_dict["parse_log_prob"]))
-        print(parsing_dict["decision_taken"])
-        print("ORACLE")
-        print(parsing_dict["oracle_parsing"])
-        print(parsing_dict["oracle_parse_len"])
-        """
         loss_pos = self.hparams.pos_cost(pos_log_prob, pos, length=seq_len)
-        self.hparams.acc_dyna.append(
-            parsing_dict["parse_log_prob"],
-            parsing_dict["oracle_parsing"],
-            parsing_dict["oracle_parse_len"],
-        )
-        loss_parse = self.hparams.parse_cost(
-            parsing_dict["parse_log_prob"],
-            parsing_dict["oracle_parsing"],
-            parsing_dict["oracle_parse_len"],
-        )
+        # NO ORACLE FOR TEST so no loss
+        if sb.Stage.TEST != stage:
+            self.hparams.acc_dyna.append(
+                parsing_dict["parse_log_prob"],
+                parsing_dict["oracle_parsing"],
+                parsing_dict["oracle_parse_len"],
+            )
+            #need to encode decision_taken as one-hot for the metric
+            #import pudb; pudb.set_trace()
+            decision_taken = parsing_dict["decision_taken"]
+            # Replace padding by another value in range of transitions, will be ignored by the metrics because of oracle_parse_len
+            decision_taken[decision_taken==-100] = 0
+            decision_taken_one_hot = torch.eye(self.hparams.number_transitions,device = self.device)[decision_taken]
+            self.hparams.acc_dyna_with_oracle.append(
+                decision_taken_one_hot,
+                parsing_dict["oracle_parsing"],
+                parsing_dict["oracle_parse_len"],
+            )
+
+            loss_parse = self.hparams.parse_cost(
+                parsing_dict["parse_log_prob"],
+                parsing_dict["oracle_parsing"],
+                parsing_dict["oracle_parse_len"],
+            )
         # Compute the loss for each element based on decision and only keep relevant one.
         # Allow to compute label in a batch way.
-        loss_label = self.hparams.label_cost(
-            parsing_dict["label_log_prob"],
-            parsing_dict["oracle_label"],
-            parsing_dict["oracle_label_len"],
-        )
-        loss = 0.1 * loss_pos + 0.8 * loss_parse + 0.1 * loss_label
+            loss_label = self.hparams.label_cost(
+                parsing_dict["label_log_prob"],
+                parsing_dict["oracle_label"],
+                parsing_dict["oracle_label_len"],
+            )
+            loss = 0.2 * loss_pos + 0.6 * loss_parse + 0.2 * loss_label
+        else: 
+            loss = torch.tensor(1)
+
         # Populate the list that will be written at the end of the stage.
-        if sb.Stage.VALID == stage:
+        if sb.Stage.TRAIN != stage:
             predicted_pos = [
                 [reverse_pos_dict.get(p.item()) for p in poss]
                 for poss in torch.argmax(pos_log_prob, dim=-1)
@@ -178,25 +189,99 @@ class Parser(sb.core.Brain):
                         }
                     )
 
+    def on_fit_start(self):
+        """Gets called at the beginning of ``fit()``, on multiple processes
+        if ``distributed_count > 0`` and backend is ddp.
+        Default implementation compiles the jit modules, initializes
+        optimizers, and loads the latest checkpoint to resume training.
+        """
+        # Run this *after* starting all processes since jit modules cannot be
+        # pickled.
+        self._compile_jit()
+
+        # Wrap modules with parallel backend after jit
+        self._wrap_distributed()
+
+        # Initialize optimizers after parameters are configured
+        self.init_optimizers()
+
+        # Load latest checkpoint to resume training if interrupted
+        if self.checkpointer is not None:
+            ckpt = self.checkpointer.recover_if_possible(
+                # Only modification is : load which module are activated from checkpoint
+                device=torch.device(self.device)
+            )
+            if ckpt is not None:
+                self.hparams.parser.exploration_rate = ckpt.meta["exploration_rate"]
+
+
+    def on_evaluate_start(self, max_key=None, min_key=None):
+        """Gets called at the beginning of ``evaluate()``
+        Default implementation loads the best-performing checkpoint for
+        evaluation, based on stored metrics.
+        Arguments
+        ---------
+        max_key : str
+            Key to use for finding best checkpoint (higher is better).
+            By default, passed to ``self.checkpointer.recover_if_possible()``.
+        min_key : str
+            Key to use for finding best checkpoint (lower is better).
+            By default, passed to ``self.checkpointer.recover_if_possible()``.
+        """
+        # Recover best checkpoint for evaluation
+        if self.checkpointer is not None:
+            ckpt = self.checkpointer.recover_if_possible(
+                max_key=max_key,
+                min_key=min_key,
+                device=torch.device(self.device),
+            )
+            if ckpt is not None:
+                self.hparams.parser.exploration_rate = ckpt.meta["exploration_rate"]
+
+
+    def _save_intra_epoch_ckpt(self):
+        """Saves a CKPT with specific intra-epoch flag."""
+        self.checkpointer.save_and_keep_only(
+            end_of_epoch=False,
+            num_to_keep=1,
+            ckpt_predicate=lambda c: INTRA_EPOCH_CKPT_FLAG in c.meta,
+            meta={
+                INTRA_EPOCH_CKPT_FLAG: True,
+                "exploration_rate" : self.hparams.parser.exploration_rate
+            },
+            verbosity=logging.DEBUG,
+        )
+
+
+
     def on_stage_start(self, stage, epoch):
         """Gets called at the beginning of each epoch"""
-        if stage != sb.Stage.TRAIN:
-            self.hparams.acc_dyna.correct = 0
-            self.hparams.acc_dyna.total = 0
+        self.hparams.acc_dyna.correct = 0
+        self.hparams.acc_dyna.total = 0
+        self.hparams.acc_dyna_with_oracle.correct = 0
+        self.hparams.acc_dyna_with_oracle.total = 0
 
     def on_stage_end(self, stage, stage_loss, epoch=None):
         stage_stats = {"loss": stage_loss}
-        print(
-            f"loss: {stage_loss}, acc_to_oracle : {self.hparams.acc_dyna.summarize()}"
-        )
-        if stage == sb.Stage.VALID:  # metrics value
+        if stage == sb.Stage.TRAIN:
+            self.train_stats = stage_stats
+            print(
+                    f"loss: {stage_loss}, acc_to_oracle : {self.hparams.acc_dyna.summarize()}, acc_with_oracle_help : {self.hparams.acc_dyna_with_oracle.summarize()}, exploration_rate: {self.hparams.parser.get_exploration_rate()}"
+            )
+
+        if stage == sb.Stage.VALID:
+            print(
+                    f"loss: {stage_loss}, acc_to_oracle : {self.hparams.acc_dyna.summarize()}"
+            )
+        if stage != sb.Stage.TRAIN:  # metrics value
+            # ADD changing path for writting and evaluation for test here
             with open(self.hparams.file_valid, "w", encoding="utf-8") as f_v:
                 write_token_dict_conllu(self.data_valid, f_v)
             self.data_valid = {}
             d = types.SimpleNamespace()
             d.system_file = self.hparams.file_valid
             d.gold_file = self.hparams.valid_conllu
-            metrics = self.hparams.eval_conll(d)
+            metrics = self.hparams.eval_conll.evaluate_wrapper(d)
             stage_stats["LAS"] = metrics["LAS"].f1 * 100
             stage_stats["UAS"] = metrics["UAS"].f1 * 100
             stage_stats["UPOS"] = metrics["UPOS"].f1 * 100
@@ -206,12 +291,27 @@ class Parser(sb.core.Brain):
         if (
             stage == sb.Stage.VALID
         ):  # Optimization of learning rate, logging, checkpointing
+
+            self.hparams.train_logger.log_stats(
+                stats_meta={
+                    "epoch": epoch,
+                },
+                train_stats=self.train_stats,
+                valid_stats=stage_stats,
+            )
             wandb_stats = {"epoch": epoch}
             wandb_stats = {**wandb_stats, **stage_stats}
             wandb.log(wandb_stats)
-            # self.checkpointer.save_and_keep_only(
-            #    meta={"LAS": stage_stats["LAS"]}, max_keys=["LAS"]
-            # )
+            self.checkpointer.save_and_keep_only(
+                meta={"LAS": stage_stats["LAS"],
+                    "exploration_rate": self.hparams.parser.exploration_rate},
+                max_keys=["LAS"]
+            )
+        # update the exploration rate
+        if stage == sb.Stage.VALID and epoch > self.hparams.number_of_epochs_static:
+            self.hparams.parser.update_exploration_rate(
+                self.hparams.scheduler.update_rate(self.hparams.parser.exploration_rate)
+            )
 
     def init_optimizers(self):
         "Initializes the model optimizer"
@@ -466,6 +566,13 @@ def main():
         valid_data,
         train_loader_kwargs=hparams["dataloader_options"],
         valid_loader_kwargs=hparams["test_dataloader_options"],
+        )
+
+    #import pudb; pudb.set_trace()
+    brain.evaluate(
+        test_data,
+        max_key='LAS',
+        test_loader_kwargs=hparams["test_dataloader_options"]
     )
 
     # print(brain.profiler.key_averages().table(sort_by="self_cpu_time_total"))

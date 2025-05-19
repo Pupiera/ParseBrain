@@ -20,9 +20,12 @@ class Parser(sb.core.Brain):
         )
         batch_len = features.shape[0]
         seq_len = torch.tensor([len(w) for w in batch.words]).to(self.device)
-        hidden = torch.zeros(4, batch_len, 800, device=self.device)
-        cell = torch.zeros(4, batch_len, 800, device=self.device)
-        lstm_out, _ = self.modules.dep2LabelFeat(features, (hidden, cell))
+        num_hidden = self.hparams.rnn_num_layer
+        if self.hparams.rnn_bidirectional:
+            num_hidden = num_hidden * 2
+        hidden = torch.zeros(num_hidden, batch_len, 768, device=self.device)
+        cell = torch.zeros(num_hidden, batch_len, 768, device=self.device)
+        lstm_out, _ = self.modules.neural_network(features, (hidden, cell))
         logits_posLabel = self.modules.posDep2Label(lstm_out)
         p_posLabel = self.hparams.log_softmax(logits_posLabel)
         logits_depLabel = self.modules.depDep2Label(lstm_out)
@@ -39,24 +42,38 @@ class Parser(sb.core.Brain):
 
     def compute_objectives(self, predictions, batch, stage):
         allowed = 0
+        sent_id = batch.sent_id
+        pos = batch.pos_tokens.data.to(self.device)
+        head = batch.head.data.to(self.device)
+        dep = batch.dep_tokens.data.to(self.device)
         loss_depLabel = self.hparams.depLabel_cost(
             predictions["p_depLabel"],
-            batch.dep_tokens,
+            dep,
             length=predictions["seq_len"],
             allowed_len_diff=allowed,
         )
         loss_govLabel = self.hparams.govLabel_cost(
             predictions["p_govLabel"],
-            batch.head,
+            head,
             length=predictions["seq_len"],
             allowed_len_diff=allowed,
         )
         loss_POS = self.hparams.posLabel_cost(
             predictions["p_posLabel"],
-            batch.pos_tokens,
+            pos,
             length=predictions["seq_len"],
             allowed_len_diff=allowed,
         )
+        if stage != sb.Stage.TRAIN:
+            self.hparams.evaluator.decode(
+                [
+                    predictions["p_govLabel"],
+                    predictions["p_depLabel"],
+                    predictions["p_posLabel"],
+                ],
+                batch.words,
+                sent_id,
+            )
         return 0.3 * loss_POS + 0.4 * loss_govLabel + 0.3 * loss_depLabel
 
     def on_stage_end(self, stage, stage_loss, epoch):
@@ -65,31 +82,29 @@ class Parser(sb.core.Brain):
             self.train_stats = stage_stats
         else:
             if stage == sb.Stage.VALID:
-                st = self.hparams.dev_output_conllu
-                goldPath_CoNLLU = self.hparams.dev_gold_conllu
-                alig_file = self.hparams.alig_path + "_valid"
+                st = self.hparams.file_valid
+                goldPath_CoNLLU = self.hparams.valid_conllu
                 order = self.dev_order
             else:
-                st = self.hparams.test_output_conllu
-                goldPath_CoNLLU = self.hparams.test_gold_conllu
-                alig_file = self.hparams.alig_path + "_test"
+                st = self.hparams.file_test
+                goldPath_CoNLLU = self.hparams.test_conllu
                 order = self.test_order
             self.hparams.evaluator.writeToCoNLLU(st, order)
-            metrics_dict = self.hparams.evaluator.evaluateCoNLLU(
-                goldPath_CoNLLU, st, alig_file
-            )
+            metrics_dict = self.hparams.evaluator.evaluateCoNLLU(goldPath_CoNLLU, st)
             stage_stats["LAS"] = metrics_dict["LAS"].f1 * 100
             stage_stats["UAS"] = metrics_dict["UAS"].f1 * 100
             stage_stats["UPOS"] = metrics_dict["UPOS"].f1 * 100
         if stage == sb.Stage.VALID:
+            '''
             old_lr_model, new_lr_model = self.hparams.lr_annealing_model(
                 stage_stats["loss"]
             )
             sb.nnet.schedulers.update_learning_rate(self.model_optimizer, new_lr_model)
+            '''
             self.hparams.train_logger.log_stats(
                 stats_meta={
                     "epoch": epoch,
-                    "lr_model": old_lr_model,
+                    #"lr_model": old_lr_model,
                 },
                 train_stats=self.train_stats,
                 valid_stats=stage_stats,
@@ -103,6 +118,24 @@ class Parser(sb.core.Brain):
                 },
                 max_keys=["LAS"],
             )
+        if stage == sb.Stage.TEST:
+            self.hparams.train_logger.log_stats(
+                stats_meta={
+                    "epoch": epoch,
+                    #"lr_model": old_lr_model,
+                },
+                test_stats=stage_stats,
+            )
+            wandb_stats = {"epoch": epoch}
+            wandb_stats = {**wandb_stats, **stage_stats}  # fuse dict
+            wandb.log(wandb_stats)
+
+
+    def init_optimizers(self):
+        "Initializes the model optimizer"
+        self.optimizer = self.hparams.model_opt_class(self.hparams.model.parameters())
+        if self.checkpointer is not None:
+            self.checkpointer.add_recoverable("modelopt", self.optimizer)
 
 
 def dataio_prepare(hparams, tokenizer):
@@ -144,7 +177,8 @@ def dataio_prepare(hparams, tokenizer):
         yield sent_id
         wrd = " ".join(words)
         yield words
-        tokens_list = tokenizer.encode_as_ids(wrd)
+        # tokens_list = tokenizer.encode_as_ids(wrd)
+        tokens_list = tokenizer.encode_plus(wrd)["input_ids"]
         yield tokens_list
         tokens_bos = torch.LongTensor([hparams["bos_index"]] + (tokens_list))
         yield tokens_bos
@@ -154,7 +188,10 @@ def dataio_prepare(hparams, tokenizer):
         yield tokens
         tokens_conllu = []
         for i, str in enumerate(words):
-            tokens_conllu.extend([i + 1] * len(tokenizer.encode_as_ids(str)))
+            # tokens_conllu.extend([i + 1] * len(tokenizer.encode_as_ids(str)))
+            tokens_conllu.extend(
+                [i + 1] * len(tokenizer.encode_plus(str)["input_ids"][1:-1])
+            )
         x = []
         y = 0
         for t_c in reversed(tokens_conllu):
@@ -169,32 +206,38 @@ def dataio_prepare(hparams, tokenizer):
 
     sb.dataio.dataset.add_dynamic_item(datasets, text_pipeline)
 
-    @sb.utils.data_pipeline.takes("wrd", "POS", "HEAD", "DEP")
+    @sb.utils.data_pipeline.takes("words", "POS", "HEAD", "DEP")
     @sb.utils.data_pipeline.provides("pos_tokens", "head", "dep_tokens")
     def syntax_pipeline(wrd, pos, head, dep):
         """
         compute gold configuration here
         """
         try:
-            pos_list = torch.LongTensor(
-                [label_alphabet[2].get(p) for p in pos.split(" ")]
-            )
-        except TypeError:
-            print(wrd)
+            poss = []
+            for p in pos:
+                p = p.upper()
+                if p =='VINF':
+                    p = 'VNF'
+                elif p =='N':
+                    p = 'NOM'
+                poss.append(p)
+            pos_list = torch.LongTensor([label_alphabet[2].get(p) for p in poss])
+        except TypeError as e:
             print(poss)
-            print([label_alphabet[2].get(p) for p in pos.split(" ")])
+            print([label_alphabet[2].get(p) for p in poss])
+            raise e
         yield pos_list
         fullLabel = encoding.encodeFromList(
-            [w for w in wrd.split(" ")],
-            [p for p in pos.split(" ")],
-            [g for g in head.split(" ")],
-            [d for d in dep.split(" ")],
+            [w for w in wrd],
+            [p for p in poss],
+            [g for g in head],
+            [d for d in dep],
         )
         # first task is gov pos and relative position
         try:
             govDep2label = torch.LongTensor(
                 [
-                    label_alphabet[0].get(fl.split("\t")[-1].split("{}")[0])
+                    label_alphabet[0].get(fl.split("\t")[-1].split("{}")[0].upper())
                     for fl in fullLabel
                 ]
             )
@@ -204,15 +247,20 @@ def dataio_prepare(hparams, tokenizer):
             print([fl.split("\t")[-1].split("{}")[0] for fl in fullLabel])
             print(
                 [
-                    label_alphabet[0].get(fl.split("\t")[-1].split("{}")[0])
+                    label_alphabet[0].get(fl.split("\t")[-1].split("{}")[0].upper())
                     for fl in fullLabel
                 ]
             )
             raise TypeError() from e
         # second task is dependency type
-        depDep2Label = torch.LongTensor(
-            [label_alphabet[1].get(fl.split("{}")[1]) for fl in fullLabel]
-        )
+        try:
+            depDep2Label = torch.LongTensor(
+                [label_alphabet[1].get(fl.split("{}")[1].upper()) for fl in fullLabel]
+            )
+        except TypeError as e:
+                print([label_alphabet[1].get(fl.split("{}")[1].upper()) for fl in fullLabel])
+                raise e
+            
         yield depDep2Label
 
     sb.dataio.dataset.add_dynamic_item(datasets, syntax_pipeline)
@@ -246,10 +294,10 @@ def build_label_alphabet(path_encoded_train):
             if len(field) > 1:
                 fullLabel = field[-1]
                 labelSplit = fullLabel.split("{}")
-                govLabel = labelSplit[0]
+                govLabel = labelSplit[0].upper()
                 if govLabel not in label_gov:
                     label_gov[govLabel] = len(label_gov)
-                depLabel = labelSplit[-1].replace("\n", "")
+                depLabel = labelSplit[-1].replace("\n", "").upper()
                 if depLabel not in label_dep:
                     label_dep[depLabel] = len(label_dep)
                 pos = field[1]
@@ -262,11 +310,22 @@ def build_label_alphabet(path_encoded_train):
                 label_gov["+" + key] = len(label_gov)
             if "-" + key not in label_gov.keys():
                 label_gov["-" + key] = len(label_gov)
-    label_gov["-1@INSERTION"] = len(label_gov)
+    for i in range(1, 10):
+        key = f"{i}@INSERTION"
+        if "+" + key not in label_gov.keys():
+            label_gov["+" + key] = len(label_gov)
+        if "-" + key not in label_gov.keys():
+            label_gov["-" + key] = len(label_gov)
+
+    #label_gov["-1@INSERTION"] = len(label_gov)
+    #label_gov["+1@INSERTION"] = len(label_gov)
     label_gov["-1@DELETION"] = len(label_gov)
     label_dep["INSERTION"] = len(label_dep)
     label_dep["DELETION"] = len(label_dep)
     label_pos["INSERTION"] = len(label_pos)
+    print(len(label_gov))
+    print(len(label_dep))
+    print(len(label_pos))
     return [label_gov, label_dep, label_pos]
 
 
@@ -291,11 +350,13 @@ def build_reverse_alphabet(alphabet):
     return reverse
 
 
+path_encoded_train = "all.seq"  # For alphabet generation
+label_alphabet = build_label_alphabet(path_encoded_train)
+reverse_label_alphabet = build_reverse_alphabet(label_alphabet)
+
+
 def main():
     wandb.init()
-    path_encoded_train = "all.seq"  # For alphabet generation
-    label_alphabet = build_label_alphabet(path_encoded_train)
-    reverse_label_alphabet = build_reverse_alphabet(label_alphabet)
     # Load hyperparameters file with command-line overrides
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
     with open(hparams_file) as fin:
@@ -325,6 +386,13 @@ def main():
     )
     brain.hparams.features_extractor.set_model(camembert)
     brain.tokenizer = tokenizer
+    # not super clean ...
+    global encoding
+    encoding = brain.hparams.encoding
+    brain.hparams.evaluator.set_alphabet(label_alphabet)
+
+    brain.dev_order = get_id_from_CoNLLfile(hparams["valid_conllu"])
+    brain.test_order = get_id_from_CoNLLfile(hparams["test_conllu"])
     brain.data_valid = []
     brain.fit(
         brain.hparams.epoch_counter,
@@ -333,3 +401,12 @@ def main():
         train_loader_kwargs=hparams["dataloader_options"],
         valid_loader_kwargs=hparams["test_dataloader_options"],
     )
+    brain.evaluate(
+        test_data,
+        max_key="LAS",
+        test_loader_kwargs=hparams["test_dataloader_options"],
+    )
+
+
+if __name__ == "__main__":
+    main()

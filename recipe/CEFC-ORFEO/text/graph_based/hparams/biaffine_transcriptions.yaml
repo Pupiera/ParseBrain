@@ -1,16 +1,15 @@
 seed: 1234
 __set_seed: !!python/object/apply:torch.manual_seed [ !ref <seed> ]
-output_folder: !ref results/Orfeo_graph_based/<seed>
+output_folder: !ref results/Orfeo_graph_based_transcriptions/<seed>
 wer_file: !ref <output_folder>/wer.txt
 save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
 
-#Data files
-data_folder: /home/getalp/pupiera/thesis/endtoend_asr_multitask/src/conllu/gold/ #/home/pupiera/getalp/pupiera/conllu/gold
-train_conllu: !ref <data_folder>/cleaned_v2_train.conllu #!ref <data_folder>/orfeo_shuf.mini_train
-valid_conllu: !ref <data_folder>/cleaned_v2_valid.conllu #!ref <data_folder>/orfeo_shuf.mini_train #!ref <data_folder>/orfeo_shuf.dev
-test_conllu: !ref <data_folder>/cleaned_v2_test_2.conllu
 
+data_folder: /home/getalp/pupiera/flaubert2-task/parsing_HOPS_ORFEO/data/LOWERCASE
+train_conllu: !ref <data_folder>/transcribe_train.conllu 
+valid_conllu: !ref <data_folder>/transcribe_dev.conllu
+test_conllu: !ref <data_folder>/transcribe_test.conllu
 
 
 # Specific information related to conllu file
@@ -69,8 +68,8 @@ features_extractor: !new:parsebrain.hugging_face_text.LastSubWordEmbedding
 
 # Parser
 
-number_pos: 22
-num_labels: 15
+number_pos: 23
+num_labels: 17
 bert_embedding_size: 768
 mlp_input: !ref <bert_embedding_size> * 2
 
@@ -172,7 +171,7 @@ graph_parser: !new:parsebrain.processing.dependency_parsing.graph_based.BiAffine
   num_labels: !ref <num_labels>
 
 # Training parameters
-number_of_epochs: 50
+number_of_epochs: 40
 
 ckpt_interval_minutes: 30 # save checkpoint every N minutes
 

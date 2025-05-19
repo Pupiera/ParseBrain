@@ -21,8 +21,6 @@ class Edge(NamedTuple):
     dep: int
 
 
-# todo: add an rnn after the extracted bert features, like in HOPS
-
 
 class GraphParser(sb.core.Brain):
     def compute_forward(self, batch, stage):
@@ -108,6 +106,8 @@ class GraphParser(sb.core.Brain):
                     sent_id=sent_id,
                     greedy=False,
                     form=form,
+                    reverse_pos_dict=reverse_pos_dict,
+                    reverse_dep_label_dict=reverse_dep_label_dict,
                 )
                 self.result_trees.append(tree)
 
@@ -130,18 +130,29 @@ class GraphParser(sb.core.Brain):
                     }
                 )
 
-    def on_stage_end(self, stage, stage_loss, epoch=None):
+    def on_stage_end(self, stage, stage_loss, epoch):
         stage_stats = {"loss": stage_loss}
+        if stage == sb.Stage.TRAIN:
+            self.train_stats = stage_stats
         if stage != sb.Stage.TRAIN:
+            if stage == sb.Stage.VALID:
+                st = self.hparams.file_valid
+                goldPath_CoNLLU = self.hparams.valid_conllu
+                #order = self.dev_order
+            else:
+                st = self.hparams.file_test
+                goldPath_CoNLLU = self.hparams.test_conllu
+                #order = self.test_order
+
             self._convert_tree_to_conllu()
-            with open(self.hparams.file_valid, "w", encoding="utf-8") as f_v:
+            with open(st, "w", encoding="utf-8") as f_v:
                 write_token_dict_conllu(self.data_valid, f_v)
             self.result_trees = []
             self.data_valid = {}
             d = types.SimpleNamespace()
-            d.system_file = self.hparams.file_valid
-            d.gold_file = self.hparams.valid_conllu
-            metrics = self.hparams.eval_conll(d)
+            d.system_file = st
+            d.gold_file = goldPath_CoNLLU
+            metrics = self.hparams.eval_conll.evaluate_wrapper(d)
 
             stage_stats["LAS"] = metrics["LAS"].f1 * 100
             stage_stats["UAS"] = metrics["UAS"].f1 * 100
@@ -154,9 +165,29 @@ class GraphParser(sb.core.Brain):
             wandb_stats = {"epoch": epoch}
             wandb_stats = {**wandb_stats, **stage_stats}
             wandb.log(wandb_stats)
+            self.hparams.train_logger.log_stats(
+                stats_meta={
+                    "epoch": epoch,
+                    #"lr_model": old_lr_model,
+                },
+                train_stats=self.train_stats,
+                valid_stats=stage_stats,
+            )
+
+
             self.checkpointer.save_and_keep_only(
                 meta={"LAS": stage_stats["LAS"]}, max_keys=["LAS"]
             )
+        if stage == sb.Stage.TEST:
+            self.hparams.train_logger.log_stats(
+                stats_meta={
+                    "epoch": epoch,
+                    #"lr_model": old_lr_model,
+                },
+                test_stats = stage_stats
+            )
+
+
 
     def init_optimizers(self):
         "Initializes the model optimizer"
@@ -273,13 +304,34 @@ def dataio_prepare(hparams, tokenizer):
     @sb.utils.data_pipeline.provides("pos_tokens", "head", "dep_tokens")
     def syntax_pipeline(pos, head, dep):
         pos.insert(0, "ROOT")
-        pos_tokens = torch.tensor([pos_dict.get(p) for p in pos])
+        try:
+            poss = []
+            for p in pos:
+                if p == 'N':
+                    p = 'NOM'
+                if p == 'VINF':
+                    p = 'VNF'
+                poss.append(p.upper())
+
+            pos_tokens = torch.tensor([pos_dict.get(p) for p in poss])
+        except RuntimeError as e:
+            print(poss)
+            print([pos_dict.get(p) for p in poss])
+            print(pos_dict)
+            raise e
         yield pos_tokens
         head = [int(h) for h in head]
         head.insert(0, 0)
         yield torch.tensor(head)
+        #dummy root for graph based (special tokens)
+        dep = [d.lower() for d in dep]
         dep.insert(0, "ROOT")
-        dep_token = torch.tensor([dep_label_dict.get(d) for d in dep])
+        try:
+            dep_token = torch.tensor([dep_label_dict.get(d) for d in dep])
+        except RuntimeError as e:
+            print(dep)
+            print([dep_label_dict.get(d) for d in dep])
+            raise e
         yield dep_token
 
     sb.dataio.dataset.add_dynamic_item(datasets, syntax_pipeline)
@@ -318,7 +370,9 @@ dep_label_dict = {
     "parenth": 11,
     "aff": 12,
     "ROOT": 13,
-    "__JOKER__": 14,
+    "__joker__": 14,
+    "deletion": 15,
+    "insertion": 16
 }
 reverse_dep_label_dict = {v: k for k, v in dep_label_dict.items()}
 
@@ -346,6 +400,7 @@ pos_dict = {
     "CLN": 19,
     "VPR": 20,
     "ROOT": 21,
+    "INSERTION": 22
 }
 
 reverse_pos_dict = {v: k for k, v in pos_dict.items()}
@@ -373,11 +428,8 @@ def main():
     # run_on_main(hparams["pretrainer"].collect_files)
     # hparams["pretrainer"].load_collected(device=run_opts["device"])
 
-    # test debug
     tokenizer = CamembertTokenizerFast.from_pretrained("camembert-base")
     camembert = CamembertModel.from_pretrained("camembert-base").to(run_opts["device"])
-    for param in camembert.parameters():
-        param.require_grad = False
     # tokenizer = hparams["tokenizer"]
 
     # Create the datasets objects as well as tokenization and encoding :-D
@@ -392,9 +444,6 @@ def main():
     brain.hparams.features_extractor.set_model(camembert)
     brain.tokenizer = tokenizer
 
-    for param in brain.hparams.modules["lm_model"].parameters():
-        param.require_grad = False
-
     brain.data_valid = {}
     brain.result_trees = []
     brain.fit(
@@ -403,6 +452,11 @@ def main():
         valid_data,
         train_loader_kwargs=hparams["dataloader_options"],
         valid_loader_kwargs=hparams["test_dataloader_options"],
+    )
+    brain.evaluate(
+        test_data,
+        max_key="LAS",
+        test_loader_kwargs=hparams["test_dataloader_options"],
     )
 
 
