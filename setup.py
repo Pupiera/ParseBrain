@@ -30,7 +30,7 @@ setup(
     packages=setuptools.find_packages(),
     package_data={"parsebrain": ["version.txt", "log-config.yaml"]},
     install_requires=[
-        "speechbrain",
+        "speechbrain=0.5.14",
         "hyperpyyaml",
         "joblib",
         "numpy",
