@@ -1,21 +1,20 @@
 # Seed needs to be set at top of yaml, before objects with parameters are made
 seed: 1234
 __set_seed: !!python/object/apply:torch.manual_seed [ !ref <seed> ]
-output_folder: !ref results/Orfeo_reldep/<seed>
+output_folder: !ref results/Orfeo_reldep_transcriptions/<seed>
 wer_file: !ref <output_folder>/wer.txt
 save_folder: !ref <output_folder>/save
 train_log: !ref <output_folder>/train_log.txt
 
 #Data files
-data_folder: /home/getalp/pupiera/thesis/endtoend_asr_multitask/src/conllu/gold/ #/home/pupiera/getalp/pupiera/conllu/gold
-train_conllu: !ref <data_folder>/cleaned_v2_train.conllu #!ref <data_folder>/orfeo_shuf.train
-valid_conllu: !ref <data_folder>/cleaned_v2_valid.conllu #!ref <data_folder>/orfeo_shuf.dev
-test_conllu: !ref <data_folder>/cleaned_v2_test_2.conllu
+data_folder: /home/getalp/pupiera/flaubert2-task/parsing_HOPS_ORFEO/data/LOWERCASE
+train_conllu: !ref <data_folder>/transcribe_train.conllu 
+valid_conllu: !ref <data_folder>/transcribe_dev.conllu
+test_conllu: !ref <data_folder>/transcribe_test.conllu
 
 # Specific information related to conllu file
 conllu_keys: [ 'lineNumber', 'words', 'lemmas','POS','UPOS','tags',
-               'HEAD','DEP','tags2','tags3','timestamp_begin',
-               'timestamp_end','speaker' ]
+               'HEAD','DEP','tags2','tags3']
 
 
 # With data_parallel batch_size is split into N jobs
@@ -63,7 +62,7 @@ features_extractor: !new:parsebrain.hugging_face_text.LastSubWordEmbedding
 #
 
 output_neuronsDep: 19 #Nb Label of dep
-output_neuronsGov: 846 #Nb label of Gov + relPos
+output_neuronsGov: 862 #Nb label of Gov + relPos
 output_neuronsPOS: 23 #Nb different POS
 
 

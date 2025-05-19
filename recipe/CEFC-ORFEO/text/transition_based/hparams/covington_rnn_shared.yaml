@@ -8,9 +8,14 @@ train_log: !ref <output_folder>/train_log.txt
 
 #Data files
 data_folder: /home/getalp/pupiera/thesis/endtoend_asr_multitask/src/conllu/gold/ #/home/pupiera/getalp/pupiera/conllu/gold
-train_conllu: !ref <data_folder>/orfeo_shuf.train #!ref <data_folder>/orfeo_shuf.mini_train #
-valid_conllu: !ref <data_folder>/orfeo_shuf.dev #!ref <data_folder>/orfeo_shuf.mini_train #!ref <data_folder>/orfeo_shuf.dev
-test_conllu: !ref <data_folder>/orfeo_shuf.test
+train_conllu: !ref <data_folder>/cleaned_v2_train.conllu #!ref <data_folder>/orfeo_shuf.train
+valid_conllu: !ref <data_folder>/cleaned_v2_valid.conllu #!ref <data_folder>/orfeo_shuf.dev
+test_conllu: !ref <data_folder>/cleaned_v2_test_2.conllu
+
+
+
+
+
 
 # Specific information related to conllu file
 conllu_keys: [ 'lineNumber', 'words', 'lemmas','POS','UPOS','tags',
@@ -21,8 +26,8 @@ conllu_keys: [ 'lineNumber', 'words', 'lemmas','POS','UPOS','tags',
 # With data_parallel batch_size is split into N jobs
 # With DDP batch_size is multiplied by N jobs
 # Must be 6 per GPU to fit 16GB of VRAM
-batch_size: 16 #8
-test_batch_size: 32 #4
+batch_size: 8 #8
+test_batch_size: 16 #32 #4
 
 dataloader_options:
   batch_size: !ref <batch_size>
@@ -52,8 +57,8 @@ embedding_dim: 768
 features_extractor: !new:parsebrain.hugging_face_text.LastSubWordEmbedding
 
 # Training parameters
-number_of_epochs: 10
-number_of_epochs_static: 2
+number_of_epochs: 40
+number_of_epochs_static: 0
 
 
 ckpt_interval_minutes: 30 # save checkpoint every N minutes
@@ -65,12 +70,11 @@ ckpt_interval_minutes: 30 # save checkpoint every N minutes
 # Transition (UAS)
 #
 
-
-
-root_embedding : !new:speechbrain.nnet.embedding.Embedding
-  num_embeddings: 1
-  embedding_dim: 768
+special_embedding : !new:speechbrain.nnet.embedding.Embedding
+  num_embeddings: 3
+  embedding_dim: !ref <embedding_dim>
   consider_as_one_hot: False
+
 
 concat_embed_dim: !ref <stack_depth_computer> + <embedding_dim>
 
@@ -78,29 +82,49 @@ rnn_bidirectional: True
 rnn_hidden_size: 768
 rnn_num_layer: 2
 
-neural_network: !new:speechbrain.nnet.containers.Sequential
-  input_shape: [ null, null, 768 ]
-  rnn: !new:speechbrain.nnet.RNN.GRU
+  #neural_network: !new:speechbrain.nnet.containers.Sequential
+  #input_shape: [ null, null, 768 ]
+  #rnn: !new:speechbrain.nnet.RNN.LSTM
+  #  input_shape: [ null, null, 768 ]
+  #  hidden_size: !ref <rnn_hidden_size>
+  #  num_layers: !ref <rnn_num_layer>
+  #  bias: True
+  #  dropout: 0 #0.5
+  #  bidirectional: !ref <rnn_bidirectional>
+  #bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  #activation1: !new:torch.nn.LeakyReLU
+  #drop: !new:torch.nn.Dropout
+  #  p: 0 #0.40
+  #linear1: !name:speechbrain.nnet.linear.Linear
+  #  n_neurons: 768
+  #  bias: True
+  #bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
+  #activation2: !new:torch.nn.LeakyReLU
+  #drop2: !new:torch.nn.Dropout
+  #  p: 0  #0.40
+  #activation3: !new:torch.nn.LeakyReLU
+  #linear_head_UAS: !name:speechbrain.nnet.linear.Linear
+  #  n_neurons: !ref <number_transitions>
+  #  bias: True
+
+neural_network: !new:speechbrain.nnet.RNN.GRU
     input_shape: [ null, null, 768 ]
     hidden_size: !ref <rnn_hidden_size>
     num_layers: !ref <rnn_num_layer>
     bias: True
     dropout: 0.5
     bidirectional: !ref <rnn_bidirectional>
-  bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
-  activation1: !new:torch.nn.LeakyReLU
-  drop: !new:torch.nn.Dropout
-    p: 0.40
+
+head_UAS: !new:speechbrain.nnet.containers.Sequential
+  input_shape: [null, !ref <rnn_hidden_size>]
   linear1: !name:speechbrain.nnet.linear.Linear
     n_neurons: 768
     bias: True
-  bn2: !name:speechbrain.nnet.normalization.BatchNorm1d
-  activation2: !new:torch.nn.LeakyReLU
-  drop2: !new:torch.nn.Dropout
+  #bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+  activation1: !new:torch.nn.LeakyReLU
+  drop1: !new:torch.nn.Dropout
     p: 0.40
-
-head_decision: !new:speechbrain.nnet.containers.Sequential
-  input_shape: [ null, null, 768 ]
+  activation2: !new:torch.nn.LeakyReLU
   linear_head_UAS: !name:speechbrain.nnet.linear.Linear
     n_neurons: !ref <number_transitions>
     bias: True
@@ -115,16 +139,28 @@ transition: !new:parsebrain.processing.dependency_parsing.transition_based.trans
 # Label (LAS)
 #
 
-#Maybe getting rep and then feeding it to both the UAS and LAS proj is better ?
-head_label: !new:speechbrain.nnet.containers.Sequential
-  input_shape: [ null, null, 768 ]
-  linear_head_label: !name:speechbrain.nnet.linear.Linear
-    n_neurons: !ref <number_label>
-    bias: True
-  log_softmax: !new:speechbrain.nnet.activations.Softmax
-    apply_log: True
+neural_network_label: !new:speechbrain.nnet.containers.Sequential
+    input_shape: [null, null, 1536]
+    linear1: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1024
+        bias: True   
+    ln1: !name:speechbrain.nnet.normalization.LayerNorm
+    activation: !new:torch.nn.LeakyReLU
+    drop: !new:torch.nn.Dropout
+        p: 0.15
+    linear2: !name:speechbrain.nnet.linear.Linear
+        n_neurons: 1024
+        bias: True
+    ln2: !name:speechbrain.nnet.normalization.LayerNorm
+    activation2: !new:torch.nn.LeakyReLU
+    linear_head: !name:speechbrain.nnet.linear.Linear
+      n_neurons: !ref <number_label>
+      bias: True
+    log_softmax: !new:speechbrain.nnet.activations.Softmax
+      apply_log: True
 
-number_label: 17
+number_label: 17      
+
 
 #
 # UPOS
@@ -147,11 +183,12 @@ neural_network_POS: !new:speechbrain.nnet.containers.Sequential
 
 number_POS: 22
 
-stack_depth_computer: 1
+stack_depth_computer: 3
 
 features_computer: !new:parsebrain.processing.dependency_parsing.transition_based.configuration_features_computer.ConfigurationFeaturesComputerConcatRNN
   stack_depth: !ref <stack_depth_computer>
   dim: !ref <embedding_dim>
+  embedding: !ref <special_embedding>
 
 dynamic_oracle: !new:parsebrain.processing.dependency_parsing.transition_based.dynamic_oracle.DynamicOracleCovington
 
@@ -159,13 +196,13 @@ label_parser: !new:parsebrain.processing.dependency_parsing.transition_based.lab
 
 parser: !new:parsebrain.processing.dependency_parsing.transition_based.TransitionBasedParser
   neural_network: !ref <neural_network>
-  decision_head: !ref <head_decision>
-  label_head: !ref <head_label>
+  decision_head: !ref <head_UAS>
+  label_neural_network: !ref <neural_network_label>
   transition: !ref <transition>
   features_computer: !ref <features_computer>
   dynamic_oracle: !ref <dynamic_oracle>
   label_policie: !ref <label_parser>
-  exploration_rate: 0.5
+  exploration_rate: 0
 
 parse_cost: !name:speechbrain.nnet.losses.nll_loss
   reduction: "mean"
@@ -182,10 +219,14 @@ pos_cost: !name:speechbrain.nnet.losses.nll_loss
 #  lr: !ref <lr>
 #  rho: 0.95
 #  eps: 1.e-8
+
 lr: 0.001
 model_opt_class: !name:torch.optim.Adam
   lr: !ref <lr>
 
+
+scheduler: !new:parsebrain.processing.dependency_parsing.transition_based.dynamic_oracle.scheduler.LinearScheduler
+  growth_rate: 0.05
 
 #
 # Functions and classes
@@ -195,20 +236,21 @@ epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
 
 modules:
   parser: !ref <neural_network>
-  head_decision: !ref <head_decision>
-  head_label: !ref <head_label>
+  head_UAS: !ref <head_UAS>
+  network_label: !ref <neural_network_label>
   pos_network: !ref <neural_network_POS>
-  root_embedding: !ref <root_embedding>
+  special_embedding: !ref <special_embedding>
 
 model: !new:torch.nn.ModuleList
-  - [ !ref <neural_network>, !ref <neural_network_POS>,
-    !ref <root_embedding>, !ref <head_decision>, !ref <head_label>]
+  - [ !ref <neural_network>, !ref <head_UAS>, !ref <neural_network_POS>,
+    !ref <special_embedding>, !ref <neural_network_label>]
 #
 # Metrics
 #
 
 acc_dyna: !new:speechbrain.utils.Accuracy.AccuracyStats
-eval_conll: !name:parsebrain.processing.dependency_parsing.eval.conll18_ud_eval.evaluate_wrapper
+acc_dyna_with_oracle: !new:speechbrain.utils.Accuracy.AccuracyStats
+eval_conll: !new:parsebrain.processing.dependency_parsing.eval.conll18_ud_eval.TextEval
 
 #
 # CONLLU output file
